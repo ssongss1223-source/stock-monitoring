@@ -1,16 +1,10 @@
 # 데이터 수집
 pykrx>=1.0.45
-FinanceDataReader>=0.9.50
 requests>=2.31.0
 
 # 데이터 처리
 pandas>=2.0.0
 numpy>=1.24.0
-
-# 기술 지표
-# TA-Lib: Windows는 https://github.com/cgohlke/talib-build 에서 wheel 다운로드
-# GCP(Linux): pip install ta-lib
-TA-Lib>=0.4.28
 
 # 스케줄링
 APScheduler>=3.10.0
@@ -21,6 +15,3 @@ python-telegram-bot>=20.0
 # 설정 관리
 PyYAML>=6.0
 python-dotenv>=1.0.0
-
-# 백테스트 (선택)
-vectorbt>=0.26.2
