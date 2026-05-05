@@ -1,0 +1,31 @@
+version: "1.0"
+description: "거래량 분석 규칙 (전략서 5장)"
+
+rules:
+  - id: vol_5d_above_20d
+    points: 2
+    description: "5일 거래량 평균 > 20일 평균"
+  - id: vol_consecutive_3d
+    points: 3
+    description: "3일 이상 연속 거래량 증가"
+  - id: vol_rise_price_flat
+    points: 4
+    description: "주가 횡보 중 거래량 증가 (세력 매집 강력 신호)"
+  - id: obv_uptrend_price_flat
+    points: 3
+    description: "OBV 우상향 (주가 횡보 중, 내부 매수세 축적)"
+  - id: vol_vs_52w_low_2x
+    points: 2
+    description: "52주 저점 거래량 대비 2배 이상 (관심 급증)"
+  - id: foreign_inst_buy
+    points: 3
+    description: "외국인/기관 소량 꾸준히 순매수 (스마트머니 유입)"
+  - id: short_interest_declining
+    points: 2
+    description: "공매도 잔량 감소 중 (하방 압력 완화)"
+
+# 최대 가능 점수: 19점
+thresholds:
+  explosion_imminent: 12  # 🔥 거래량 폭발 임박
+  monitoring: 8           # 🔶 모니터링 대기
+  pass_below: 7           # 이하 패스

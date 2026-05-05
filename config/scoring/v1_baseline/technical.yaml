@@ -1,0 +1,61 @@
+version: "1.0"
+description: "기술 지표 분석 규칙 (전략서 6~8장)"
+
+# ── 다중 이동평균 (전략서 6-1) ──────────────────────────────────────────────
+# 최대 가능 점수: 14점
+ma_rules:
+  - id: price_above_20ma
+    points: 1
+    description: "종가 > 20일선 (단기 추세 살아있음)"
+  - id: price_above_60ma
+    points: 2
+    description: "종가 > 60일선 (중기 추세)"
+  - id: price_above_120ma
+    points: 2
+    description: "종가 > 120일선 (장기 추세)"
+  - id: price_above_240ma
+    points: 2
+    description: "종가 > 240일선 (대세 상승)"
+  - id: ma20_above_ma60
+    points: 2
+    description: "20일선 > 60일선 (단중기 정배열)"
+  - id: ma60_above_ma120
+    points: 2
+    description: "60일선 > 120일선 (중장기 정배열)"
+  - id: ma120_uptrend
+    points: 2
+    description: "120일선 우상향 (장기 추세 안정적)"
+  - id: near_52w_high_5pct
+    points: 1
+    description: "52주 신고가 5% 이내 (위 저항 없음)"
+
+# ── 일목균형표 (전략서 6-2) ─────────────────────────────────────────────────
+# 긍정 신호: +3~+5 / 부정 신호: 음수 (trend_score에 합산됨)
+# ichimoku_triple_positive는 ichimoku_cloud_support와 중복 설정 금지
+ichimoku_rules:
+  - id: ichimoku_triple_positive
+    points: 5
+    description: "삼역호전 (전환선>기준선 + 주가>구름대 + 후행스팬>26일전 주가) — S급 신호"
+  - id: ichimoku_cloud_support
+    points: 3
+    description: "구름대 상단 지지 반등 (삼역호전 미충족 시만 설정)"
+  - id: ichimoku_cloud_break
+    points: -3
+    description: "종가가 구름대 아래 이탈 (손절 기준선)"
+  - id: ichimoku_dead_cross
+    points: -2
+    description: "전환선/기준선 데드크로스 (추세 약화)"
+
+# 이동평균 스코어 기준
+ma_thresholds:
+  strong_trend: 12  # 강한 상승 추세 ✅
+  moderate_trend: 8 # 중간 추세 🔶
+  weak_trend: 7     # 이하 약함 ❌
+
+# 패턴 인식 목록 (전략서 7장)
+# S등급 필요 조건. 수치 점수에 더하지 않고 등급 조건으로만 사용.
+patterns:
+  - cup_handle            # 컵앤핸들
+  - rounding_bottom       # 밥그릇
+  - triangle_convergence  # 삼각수렴
+  - bb_squeeze            # 볼린저밴드 수축

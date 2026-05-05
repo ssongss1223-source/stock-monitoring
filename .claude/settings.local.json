@@ -1,0 +1,34 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(New-Item -ItemType Directory -Force -Path \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\\\\scripts\")",
+      "Bash(Out-Null)",
+      "Bash(Write-Output \"done\")",
+      "PowerShell(New-Item -ItemType Directory -Force -Path \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\\\\scripts\")",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent market 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent volume 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent technical 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python -m pip install FinanceDataReader -q 2>&1; Write-Output \"설치 완료\")",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python -m pip install finance-datareader -q 2>&1; Write-Output \"done\")",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent universe 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent buy 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent sell 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python scripts/verify_agents.py --agent crash 2>&1)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python main.py --run-now 2>&1)",
+      "PowerShell($file = \"C:\\\\Users\\\\KHSong\\\\AppData\\\\Local\\\\Temp\\\\claude\\\\c--Users-KHSong-OneDrive-00-claude-code-2605-stock-monitoring\\\\c2f2bb0a-8302-4e60-8b6d-6598f8e045f8\\\\tasks\\\\bcpyr5s3a.output\"; $lines = Get-Content $file; $total = $lines.Count; Write-Output \"총 줄수: $total\"; $lines | Select-Object -Last 60)",
+      "PowerShell($logfile = \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\\\\stock_monitor.log\"; [System.IO.File]::ReadAllLines\\($logfile, [System.Text.Encoding]::UTF8\\) | Where-Object { $_ -match \"매수 신호|ReportAgent|일일 분석|텔레그램|완료\" } | Select-Object -Last 10)",
+      "PowerShell(Get-Process python -ErrorAction SilentlyContinue)",
+      "PowerShell(Stop-Process -Force)",
+      "PowerShell(cd \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; Remove-Item stock_monitor.log -ErrorAction SilentlyContinue; $env:PYTHONUTF8=\"1\"; python main.py --run-now 2>&1 | Tee-Object -FilePath run_output.txt)",
+      "PowerShell(cd \"C:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\"; $env:PYTHONUTF8=\"1\"; python main.py --run-now 2>&1 | Tee-Object -FilePath run_output2.txt)",
+      "Bash(dir \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\")",
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import sys,io; sys.stdout=io.TextIOWrapper\\(sys.stdout.buffer,encoding='utf-8',errors='replace'\\); from models.signals import MarketContext; import dataclasses; print\\([f.name for f in dataclasses.fields\\(MarketContext\\)]\\)\")",
+      "Bash(python scripts/verify_agents.py --agent crash)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\" -File | Where-Object { $_.Extension -in @\\('.csv', '.db', '.json', '.txt', '.md'\\) })",
+      "Bash(python backtest/pattern_backtest.py --ticker 005930)",
+      "Bash(python backtest/pattern_backtest.py --ticker 005930 --test-start 20250401)",
+      "Bash(python backtest/pattern_backtest.py --ticker 000660 --test-start 20250401)"
+    ]
+  }
+}

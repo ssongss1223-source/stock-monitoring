@@ -1,0 +1,106 @@
+version: "1.0"
+description: "매도 스코어링 규칙 (전략서 9장)"
+
+# ── 시나리오 1: 익절 (전략서 9-1) ──────────────────────────────────────────
+# profit_8pct / profit_12pct, rsi_above_70 / rsi_above_80 는 상호 배타적 티어:
+# 에이전트에서 해당 구간에만 True를 설정할 것 (중복 설정 금지)
+profit_taking:
+  rules:
+    - id: profit_8pct
+      points: 2
+      description: "수익률 +8% 이상 (8%~12% 구간만)"
+    - id: profit_12pct
+      points: 3
+      description: "수익률 +12% 이상 (profit_8pct와 중복 설정 금지)"
+    - id: rsi_above_70
+      points: 2
+      description: "RSI 70 이상 (70~80 구간만)"
+    - id: rsi_above_80
+      points: 3
+      description: "RSI 80 이상 (rsi_above_70과 중복 설정 금지)"
+    - id: high_range_low_vol_3d
+      points: 2
+      description: "거래량 없이 고점 횡보 3일"
+    - id: large_bearish_candle
+      points: 2
+      description: "장대 음봉 출현"
+    - id: foreign_inst_net_sell
+      points: 2
+      description: "외국인/기관 순매도 전환"
+  thresholds:
+    half_sell: 5  # 5점 이상 → 절반 매도 알림
+    full_sell: 8  # 8점 이상 → 전량 매도 알림
+
+# ── 시나리오 2: 추세 이탈 (전략서 9-2) ─────────────────────────────────────
+# break_20ma와 break_60ma는 중복 설정 가능 (60일선 이탈 시 둘 다 True)
+trend_break:
+  rules:
+    - id: break_20ma
+      points: 3
+      description: "종가가 20일선 아래 이탈"
+    - id: break_60ma
+      points: 4
+      description: "종가가 60일선 아래 이탈 (break_20ma와 누적 적용)"
+    - id: break_with_high_volume
+      points: 2
+      description: "이탈 당일 거래량 평균 이상"
+    - id: rsi_below_45
+      points: 1
+      description: "RSI 45 이하"
+    - id: lower_low
+      points: 2
+      description: "직전 저점 하향 돌파"
+    - id: foreign_3d_net_sell
+      points: 2
+      description: "외국인 3일 연속 순매도"
+    - id: bearish_3d_consecutive
+      points: 1
+      description: "음봉 3일 연속"
+  thresholds:
+    sell_review: 4  # 4점 이상 → 매도 검토
+    strong_sell: 7  # 7점 이상 → 강한 매도
+
+# ── 시나리오 3: 강제 손절 (전략서 9-3) ─────────────────────────────────────
+# 점수 무관 즉시 발동. check_forced_stoploss()에서 사용.
+forced_stoploss:
+  conditions:
+    - id: stoploss_5pct
+      description: "매수가 대비 -5% 이탈"
+    - id: stoploss_60ma_volume
+      description: "60일선 이탈 + 거래량 폭발 하락"
+
+# ── 시나리오 4: 보유 연장 억제 (전략서 9-4) ─────────────────────────────────
+# 음수 점수. 익절/추세이탈 스코어에서 차감하여 실효 스코어 낮춤.
+hold_extension:
+  rules:
+    - id: strong_bullish_candle_volume
+      points: -2
+      description: "거래량 동반 강한 양봉"
+    - id: foreign_strong_net_buy
+      points: -2
+      description: "외국인 오늘 강한 순매수"
+    - id: new_52w_high
+      points: -1
+      description: "52주 신고가 경신 중"
+    - id: ma20_strong_uptrend
+      points: -1
+      description: "20일선이 강하게 우상향"
+
+# ── 매도 우선순위 (전략서 9-5) ──────────────────────────────────────────────
+# SellSignalAgent가 action 결정 시 참고. YAML은 문서화 목적.
+priority:
+  - priority: 1
+    action: stop_loss
+    condition: "forced_stoploss 발동 (-5% 또는 60일선+거래량 이탈)"
+  - priority: 2
+    action: full_sell
+    condition: "추세이탈 실효 7점 이상"
+  - priority: 3
+    action: full_sell
+    condition: "익절 실효 8점 이상"
+  - priority: 4
+    action: half_sell
+    condition: "익절 실효 5점 이상"
+  - priority: 5
+    action: hold
+    condition: "억제 조건 강함 또는 기준 미달"
