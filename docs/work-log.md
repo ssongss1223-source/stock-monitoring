@@ -89,6 +89,30 @@
 - 메모: 손절 생존 필터(max_drawdown >= -5%)가 승률 차이를 크게 만듦. 리스크 관리가 핵심.
 - 다음 아이디어: feature별 lift 분석으로 volume 중복 문제 정량화
 
+## 2026-05-07 세션 16 — Validator + Optimizer + Scoring 가중치 조정
+
+- 작업: feature lift 분석 → 조합 최적화 → scoring 가중치 데이터 기반 조정
+- 변경 사항:
+  - `backtest/validator.py` 신규: 여러 날짜 샘플링 기반 feature별 lift 분석
+  - `backtest/optimizer.py` 신규: feature 조합 sweep + walk-forward validation
+  - `config/scoring/v1_baseline/technical.yaml`: `near_52w_high_5pct` +1→+3, `ichimoku_cloud_support` +3→+1
+  - `config/scoring/v1_baseline/buy_grade.yaml`: S등급 `pattern_required: true → false`
+  - `.gitignore`: `data/` → `data/*` + `!data/*.py` (Python 소스 추적 허용)
+  - GCP VM(instance-20260505-092414)에 세션 13~15 변경사항 반영
+- Lift 분석 결과 (3일 3%, 12날짜, 4,212건, 기준선 53.6%):
+  - ichimoku_triple_positive: 1.177 (1위)
+  - near_52w_high_5pct: 1.172 (2위) → 심각하게 저평가되어 있었음
+  - has_pattern: 1.016 → 무의미, S등급 패턴 요건 제거
+  - ichimoku_cloud_support: 1.011 → 과대평가, 점수 하향
+- Optimizer Walk-forward OOS 결과:
+  - Best combo: ichimoku_triple_positive & near_52w_high_5pct
+  - Fold1 OOS lift=1.184 / Fold2 OOS lift=1.133
+- 메모:
+  - 운영 VM이 `stock-monitor-vm`이 아니라 `instance-20260505-092414`임을 확인
+  - validator는 pykrx 라이브 API 없이 DuckDB 저장 데이터만 사용
+  - 샘플 기간이 상승장(2026-01~04) 편향 — 하락장 검증 필요
+- 다음 아이디어: feature_matrix.py로 signal_history 소급 적재 → 실신호 기반 lift 재검증
+
 ## 2026-05-07 세션 14 — 시스템 전면 재설계
 - 작업: 설계 방향 전환 논의 + 새 아키텍처 설계 확정
 - 변경 사항:

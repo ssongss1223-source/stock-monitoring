@@ -26,8 +26,8 @@ ma_rules:
     points: 2
     description: "120일선 우상향 (장기 추세 안정적)"
   - id: near_52w_high_5pct
-    points: 1
-    description: "52주 신고가 5% 이내 (위 저항 없음)"
+    points: 3
+    description: "52주 신고가 5% 이내 (위 저항 없음) — lift 1.172, 상향"
 
 # ── 일목균형표 (전략서 6-2) ─────────────────────────────────────────────────
 # 긍정 신호: +3~+5 / 부정 신호: 음수 (trend_score에 합산됨)
@@ -37,8 +37,8 @@ ichimoku_rules:
     points: 5
     description: "삼역호전 (전환선>기준선 + 주가>구름대 + 후행스팬>26일전 주가) — S급 신호"
   - id: ichimoku_cloud_support
-    points: 3
-    description: "구름대 상단 지지 반등 (삼역호전 미충족 시만 설정)"
+    points: 1
+    description: "구름대 상단 지지 반등 (삼역호전 미충족 시만 설정) — lift 1.011, 하향"
   - id: ichimoku_cloud_break
     points: -3
     description: "종가가 구름대 아래 이탈 (손절 기준선)"
