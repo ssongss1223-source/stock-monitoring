@@ -1,49 +1,61 @@
 # Checkpoint
 
 ## Current Goal
-- 거래량 분석 60분봉 교체 완료 → `python main.py --run-now` 파이프라인 검증
+- 백테스트 인프라 완성 → feature별 lift 분석 (Phase 2 진입 준비)
 
 ## Current Status
-- Phase 1 전체 구현 완료, GCP 배포 완료 (systemd 실행 중)
-- 거래량 분석을 일봉 binary flag → 60분봉 종목별 percentile 방식으로 교체 완료 (세션 12)
-- 텔레그램 실제 발송 확인됨 (세션 11)
-- 미검증: 60분봉 교체 후 `main.py --run-now` 회귀 테스트 아직 미실행
+- 세션 15: DuckDB 인프라 + 마이그레이션 + Labeler 구현 완료
+- 백테스트 기준선 확인: 3일 3% 승률 29.9% (2026-04-01 기준, 359종목 전체)
+- 다음 단계: feature별 lift 분석 (`backtest/validator.py`) 또는 GCP 반영
 
 ## Done
-- Phase 1 에이전트 전체 구현 (market/universe/tech/volume/buy/sell/report/orchestrator)
-- OHLCV Parquet 영속화 (일봉 pykrx, 60분봉 yfinance)
-- 패턴학습 모듈 (코사인 유사도, 윈도우 최적화, HIGH/MEDIUM/LOW 등급)
-- 텔레그램 3단계 메시지 포맷 (전체 분석 목록 + 상승예측 목록 + 상세)
-- GCP e2-micro VM + systemd 서비스 등록
-- **거래량 분석 60분봉 교체** (세션 12):
-  - `VolumeProfileCache` — 종목별 시간대별 P90/P95/P99 산출 + JSON 캐시
-  - 5개 신규 feature: `hourly_vol_ratio_p95`, `hourly_vol_zscore_high`, `relative_turnover_high`, `vwap_above_60m`, `obv_slope_up_60m`
-  - `foreign_inst_buy` (pykrx 일봉) 유지 — 스마트머니 중기 신호
-  - `volume.yaml` 교체 (최대 20점), `buy_grade.yaml` volume_min 재조정 (S:10, A:7, B:4)
-  - `orchestrator.py` → `vol_agent.run(df_60m=df_60m)` 전달
-  - `config.py` → `VOLUME_PROFILE_CACHE` 경로 추가
+- **DuckDB 인프라 구축** (세션 15):
+  - `data/db.py`: 5개 테이블 스키마 (ohlcv_min, ohlcv_daily, ticker_master, signal_history, backtest_labels)
+  - `backtest_labels` PK: `(signal_date, ticker, hold_days, target_return)` — 다중 파라미터 실험 지원
+  - `data/store.py`: Parquet 기반 → DuckDB 전면 교체, `migrate_parquet_to_duckdb()` 포함
+  - 마이그레이션 완료: 일봉 359종목 210,297행 / 60분봉 356종목 123,699행
+- **Labeler 구현** (세션 15):
+  - `backtest/labeler.py`: `label_one()`, `label_batch()`, `save_labels()`, `summarize()`
+  - CLI: `python -m backtest.labeler --date YYYY-MM-DD --days N --pct 0.0N --save`
+- **백테스트 기준선** (2026-04-01, 359종목):
+  - 3일 3%: 승률 29.9%, 손절 생존 후 45.3%, 평균 수익 -2.79%, 평균 낙폭 -6.59%
+  - 5일 5%: 승률 31.6%, 손절 생존 후 37.0%, 평균 수익 +0.76%, 평균 낙폭 -7.26%
+- 세션 13 완료 사항 (GCP 미반영):
+  - `data/kis_client.py`: KIS 당일 1분봉 → 60분 리샘플
+  - `agents/orchestrator.py`: DataFrame bool 평가 버그 수정
 
 ## Remaining
-- `python main.py --run-now` 회귀 테스트 (60분봉 교체 후 첫 전체 실행)
-- `python backtest/pattern_backtest.py --watchlist --test-start 20250401` — HIGH 정밀도 >60% 확인
-- GCP VM `--run-now` 최종 검증
-- Secret Manager 연동 (현재 .env 직접 기입으로 대체 중)
+- **[즉시] `backtest/validator.py`**: feature별 lift 분석
+  - lift = P(label=1 | feature=True) / P(label=1 | feature=False)
+  - signal_history가 없으므로 먼저 과거 신호 생성 필요 → 또는 전체 종목 날짜 스캔 방식
+- **[즉시] GCP VM 반영**: git commit + push → VM pull + systemd 재시작
+  - 세션 13 + 세션 15 변경사항 모두 미반영
+- **[이후] `backtest/feature_matrix.py`**: 과거 날짜 기준 feature 재계산
+- **[이후] `backtest/optimizer.py`**: threshold sweep + walk-forward
+- **[이후] Secret Manager 연동**: 현재 .env 직접 기입
+- **[이후] pykrx 공매도 잔량 수집**: `short_balance` 컬럼 추가
+- **[중장기] Kiwoom OpenAPI+ 연동**: 160일 분봉 소급
 
 ## Risks / Blockers
-- yfinance 한국 주식 60분봉 데이터 누락 시 해당 종목 `volume_score=0` → 매수 신호 미생성 (의도된 동작이나 범위 파악 필요)
-- 새 volume_score 범위(0~20)로 buy_grade 임계값 재조정했으나 실데이터 배분 확인 필요
+- signal_history 미적재: validator.py 구현 전 과거 신호 재현 방법 결정 필요
+  - 옵션 A: 과거 날짜를 순회하며 feature 재계산 (feature_matrix.py 먼저 필요)
+  - 옵션 B: 특정 날짜의 전체 종목 라벨만 먼저 계산하고, 신호 필터는 수동 지정
+- 60분봉 데이터 60일 한계: 분봉 feature 백테스트 신뢰도 낮음 → 일봉 feature로 먼저 분석
+- GCP e2-micro 1GB RAM: 파이프라인 병렬 실행 시 메모리 주의
+- ReportAgent "15723번 발송 시도" 원인 미확인
 
 ## Next Actions
-1. `python main.py --run-now` 실행 → 매수 신호 생성 수 및 등급 분포 확인
-2. `volume_score` 분포 확인 — 60분봉 없는 종목 비율 파악
-3. 이상 없으면 GCP VM에 `git pull` + 재시작
+1. `git commit + push` → GCP VM 반영 (세션 13~15 변경사항)
+2. `backtest/validator.py` 구현 — feature별 lift 분석
+3. validator 결과로 volume feature 중복 문제 정량 확인 (승률 vs. 랜덤 기준선 비교)
 
 ## References
-- 설계: `설계문서.md`, `거래량분석_설계문서.md`
-- 스코어링 규칙: `config/scoring/v1_baseline/` (volume.yaml, buy_grade.yaml)
-- 거래량 에이전트: `agents/volume_analysis.py` (VolumeProfileCache 포함)
-- 캐시: `data/volume_profile_cache.json` (런타임 생성), `data/pattern_cache.json`
-- 계획서: `.claude/plans/volume_analysis_60m.md`
+- **설계 플랜**: `.claude/plans/feature-streamed-reddy_new2.md`
+- **DuckDB**: `data/stock.duckdb` (단일 파일)
+- **DB 스키마**: `data/db.py`
+- **데이터 저장소**: `data/store.py`
+- **라벨러**: `backtest/labeler.py`
+- KIS 클라이언트: `data/kis_client.py`
 
 ## Last Updated
-- 2026-05-07 세션 12
+- 2026-05-07 세션 15
