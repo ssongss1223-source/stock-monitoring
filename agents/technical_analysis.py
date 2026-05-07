@@ -20,19 +20,20 @@ class TechnicalAnalysisAgent:
         self.engine = engine
         self.last_df: pd.DataFrame | None = None  # 패턴 학습 재사용 (추가 API 호출 방지)
 
-    async def run(self, ticker: str) -> TechnicalResult:
+    async def run(self, ticker: str, df: pd.DataFrame | None = None) -> TechnicalResult:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._analyze, ticker)
+        return await loop.run_in_executor(None, self._analyze, ticker, df)
 
-    def _analyze(self, ticker: str) -> TechnicalResult:
-        today = _today()
-        try:
-            # 240일선 + 일목균형표에 필요한 데이터: 최소 300 거래일 이상
-            df = stock.get_market_ohlcv_by_date(_ago(420), today, ticker)
-        except Exception as e:
-            logger.warning("%s OHLCV 조회 실패: %s", ticker, e)
-            self.last_df = None
-            return _empty(ticker)
+    def _analyze(self, ticker: str, df: pd.DataFrame | None = None) -> TechnicalResult:
+        if df is None:
+            today = _today()
+            try:
+                # 240일선 + 일목균형표에 필요한 데이터: 최소 300 거래일 이상
+                df = stock.get_market_ohlcv_by_date(_ago(420), today, ticker)
+            except Exception as e:
+                logger.warning("%s OHLCV 조회 실패: %s", ticker, e)
+                self.last_df = None
+                return _empty(ticker)
 
         if df is None or df.empty or len(df) < 60:
             self.last_df = None
@@ -170,13 +171,85 @@ def _detect_pattern(
     """우선순위 순서로 패턴 체크. 첫 번째 감지된 패턴 반환."""
     if _cup_handle(close, high, low):
         return "cup_handle"
-    if _rounding_bottom(close):
-        return "rounding_bottom"
+    if _falling_box_breakout_pullback(close, high, low):
+        return "falling_box_breakout"
     if _triangle_convergence(close, high, low, vol):
         return "triangle_convergence"
     if _bb_squeeze(close):
         return "bb_squeeze"
     return None
+
+
+def _falling_box_breakout_pullback(
+    close: pd.Series,
+    high: pd.Series,
+    low: pd.Series,
+    box_window: int = 40,
+    recent_window: int = 25,
+) -> bool:
+    """하락 박스 돌파 후 눌림목 패턴.
+    1. 직전 box_window일간 하락 채널 (고점↓ + 저점↓, 최소 10% 하락)
+    2. 최근 recent_window일 내 채널 상단선 돌파
+    3. 돌파 후 조정이 상승 대비 1.5배 이상 완만하고 50% 미만 반납
+    4. 현재가가 채널 상단선 위에서 유지 (±5%)
+    """
+    needed = box_window + recent_window
+    if len(close) < needed:
+        return False
+
+    # ── 1. 하락 채널 확인 ─────────────────────────────────────────────────
+    box_h = high.iloc[-needed:-recent_window].values.astype(float)
+    box_l = low.iloc[-needed:-recent_window].values.astype(float)
+    x = np.arange(box_window)
+    high_coef = np.polyfit(x, box_h, 1)
+    low_coef = np.polyfit(x, box_l, 1)
+
+    if high_coef[0] >= 0 or low_coef[0] >= 0:
+        return False
+
+    # 하락폭 최소 10% (노이즈 필터)
+    box_depth = (box_h[0] - box_l[-1]) / box_h[0] if box_h[0] > 0 else 0
+    if box_depth < 0.10:
+        return False
+
+    # ── 2. 채널 상단선을 recent_window 구간으로 연장 ──────────────────────
+    channel_tops = np.array([
+        np.polyval(high_coef, box_window + i) for i in range(recent_window)
+    ])
+    recent_close = close.iloc[-recent_window:].values.astype(float)
+    above = recent_close > channel_tops
+
+    if not above.any():
+        return False
+
+    first_break = int(np.argmax(above))
+    post_break = recent_close[first_break:]
+
+    if len(post_break) < 2:
+        return True  # 방금 돌파 — 돌파 신호
+
+    # ── 3. 돌파 후 고점 찾기 ─────────────────────────────────────────────
+    peak_rel = int(np.argmax(post_break))
+    peak_abs = first_break + peak_rel
+
+    if peak_abs == len(recent_close) - 1:
+        return True  # 현재가 = 고점, 아직 조정 없음
+
+    # ── 4. 조정 각도 분석 ─────────────────────────────────────────────────
+    rise_days = peak_rel + 1
+    correction_days = len(recent_close) - 1 - peak_abs
+
+    if correction_days < 2:
+        return False
+
+    smooth = correction_days >= rise_days * 1.5
+
+    peak_price = post_break[peak_rel]
+    current = float(recent_close[-1])
+    not_collapsed = (peak_price - current) / peak_price < 0.50 if peak_price > 0 else False
+    still_above = current > channel_tops[-1] * 0.95
+
+    return smooth and not_collapsed and still_above
 
 
 def _bb_squeeze(close: pd.Series, window: int = 20) -> bool:
@@ -213,16 +286,6 @@ def _triangle_convergence(
     return high_slope < 0 and low_slope > 0 and vol_shrinking
 
 
-def _rounding_bottom(close: pd.Series, window: int = 60) -> bool:
-    """밥그릇: U자형 가격 패턴. 중간이 양끝보다 낮고 우측이 회복 중."""
-    if len(close) < window:
-        return False
-    p = close.iloc[-window:].values.astype(float)
-    t = window // 3
-    left, mid, right = p[:t].mean(), p[t:2*t].mean(), p[2*t:].mean()
-    return mid < left * 0.97 and right > mid * 1.02
-
-
 def _cup_handle(close: pd.Series, high: pd.Series, low: pd.Series,
                 cup_w: int = 60, handle_w: int = 20) -> bool:
     """컵앤핸들: 컵(U형) 후 핸들(15% 이내 눌림)."""
@@ -231,12 +294,15 @@ def _cup_handle(close: pd.Series, high: pd.Series, low: pd.Series,
     cup_close = close.iloc[-(cup_w + handle_w):-handle_w]
     handle_close = close.iloc[-handle_w:]
     cup_high = float(high.iloc[-(cup_w + handle_w):-handle_w].max())
+    cup_low = float(low.iloc[-(cup_w + handle_w):-handle_w].min())
 
-    if not _rounding_bottom(cup_close, len(cup_close)):
+    # U형 확인: 저점과 고점의 낙폭이 최소 5% 이상
+    cup_depth = (cup_high - cup_low) / cup_low if cup_low > 0 else 0
+    if cup_depth < 0.05:  # 최소 5% 낙폭 필요
         return False
 
     handle_low = float(handle_close.min())
-    pullback = (cup_high - handle_low) / cup_high
+    pullback = (cup_high - handle_low) / cup_high if cup_high > 0 else 1
     recovering = float(handle_close.iloc[-1]) > handle_low * 1.02
     return pullback <= 0.15 and recovering
 

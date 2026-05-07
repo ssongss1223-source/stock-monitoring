@@ -2,7 +2,7 @@ import logging
 from typing import Optional
 
 from core.scoring_engine import ScoringEngine
-from models.signals import BuySignal, MarketContext, TechnicalResult, VolumeResult
+from models.signals import BuySignal, MarketContext, PatternLearningResult, TechnicalResult, VolumeResult
 
 logger = logging.getLogger(__name__)
 
@@ -23,9 +23,13 @@ class BuySignalAgent:
         tech: TechnicalResult,
         vol: VolumeResult,
         market_ctx: MarketContext,
+        pattern_result: Optional[PatternLearningResult] = None,
     ) -> Optional[BuySignal]:
+        p_bonus = _pattern_bonus(pattern_result)
+        effective_trend = tech.total_score + p_bonus
+
         grade = self.engine.determine_grade(
-            trend_score=tech.total_score,
+            trend_score=effective_trend,
             volume_score=vol.volume_score,
             has_pattern=tech.pattern is not None,
             market_bias=market_ctx.market_bias,
@@ -45,14 +49,14 @@ class BuySignalAgent:
         risk_reward = round(reward / risk, 2) if risk > 0 else 0.0
 
         logger.info(
-            "BuySignal: %s(%s) 등급=%s 추세=%d 거래량=%d bias=%d",
-            ticker, name, grade, tech.total_score, vol.volume_score, market_ctx.market_bias,
+            "BuySignal: %s(%s) 등급=%s 추세=%d 패턴보너스=%d 거래량=%d bias=%d",
+            ticker, name, grade, tech.total_score, p_bonus, vol.volume_score, market_ctx.market_bias,
         )
         return BuySignal(
             ticker=ticker,
             name=name,
             grade=grade,
-            total_score=tech.total_score + vol.volume_score,
+            total_score=effective_trend + vol.volume_score,
             trend_score=tech.total_score,
             volume_score=vol.volume_score,
             pattern=tech.pattern,
@@ -60,7 +64,19 @@ class BuySignalAgent:
             stop_loss=stop_loss,
             target_price=target_price,
             risk_reward=risk_reward,
+            pattern_score=p_bonus,
         )
+
+
+def _pattern_bonus(pr: Optional[PatternLearningResult]) -> int:
+    """PatternLearningResult 등급에 따른 추세 점수 보너스."""
+    if pr is None:
+        return 0
+    if pr.grade == "HIGH":
+        return 3
+    if pr.grade == "MEDIUM":
+        return 1
+    return 0
 
 
 def _calc_stop_loss(current_price: float, tech: TechnicalResult) -> float:

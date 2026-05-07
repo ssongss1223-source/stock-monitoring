@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 WINDOW_CANDIDATES = [10, 15, 20, 30, 40]
 FUTURE_DAYS = 5
-SUCCESS_THRESHOLD = 0.05   # +5%
+SUCCESS_THRESHOLD = 0.03   # +3%
 TOP_K = 20
 MIN_DATA_DAYS = 100
 HOLDOUT_DAYS = 100
@@ -24,22 +24,25 @@ CACHE_FILE = Path("data/pattern_cache.json")
 class StockPatternLearner:
     """종목별 과거 패턴과 현재 패턴의 코사인 유사도를 계산해 상승 확률을 추정한다."""
 
-    async def run(self, ticker: str, df: pd.DataFrame | None = None) -> PatternLearningResult:
+    async def run(self, ticker: str, df: pd.DataFrame | None = None,
+                  df_60m: pd.DataFrame | None = None) -> PatternLearningResult:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._analyze, ticker, df)
+        return await loop.run_in_executor(None, self._analyze, ticker, df, df_60m)
 
     @staticmethod
     def _insufficient(ticker: str) -> PatternLearningResult:
         return PatternLearningResult(ticker, 0.0, 0, 0.0, 0, 20, "N/A", "INSUFFICIENT")
 
-    def _analyze(self, ticker: str, df: pd.DataFrame | None) -> PatternLearningResult:
+    def _analyze(self, ticker: str, df: pd.DataFrame | None,
+                 df_60m: pd.DataFrame | None = None) -> PatternLearningResult:
         try:
-            return self._analyze_inner(ticker, df)
+            return self._analyze_inner(ticker, df, df_60m)
         except Exception as e:
             logger.warning("%s 패턴 분석 오류: %s", ticker, e)
             return self._insufficient(ticker)
 
-    def _analyze_inner(self, ticker: str, df: pd.DataFrame | None) -> PatternLearningResult:
+    def _analyze_inner(self, ticker: str, df: pd.DataFrame | None,
+                       df_60m: pd.DataFrame | None = None) -> PatternLearningResult:
         # ── Step A: 데이터 준비 ───────────────────────────────────────────────
         if df is None or df.empty:
             today = date.today().strftime("%Y%m%d")
@@ -61,23 +64,34 @@ class StockPatternLearner:
         # 투자자 데이터 (4채널 시도)
         investor_df = _fetch_investor(ticker, len(close))
         has_investor = investor_df is not None
-        dim_label = "FULL(4ch)" if has_investor else "PARTIAL(2ch)"
+
+        # 60분봉 집계 특성
+        hourly_features = _build_hourly_features(df.index, df_60m)
+
+        if has_investor and hourly_features is not None:
+            dim_label = "FULL(6ch)"
+        elif has_investor:
+            dim_label = "FULL(4ch)"
+        elif hourly_features is not None:
+            dim_label = "PARTIAL(4ch+H)"
+        else:
+            dim_label = "PARTIAL(2ch)"
 
         # ── Step B: 윈도우 최적화 (종목별 1회, 일별 캐싱) ──────────────────────
-        optimal_w = _load_cache(ticker)
+        optimal_w = _load_cache(ticker, dim_label)
         if optimal_w is None:
-            optimal_w = _optimize_window(close, vol, investor_df)
-            _save_cache(ticker, optimal_w)
+            optimal_w = _optimize_window(close, vol, investor_df, hourly_features)
+            _save_cache(ticker, optimal_w, dim_label)
 
         # ── Step C: 역사적 윈도우 벡터 생성 ──────────────────────────────────
         corpus, labels, returns = _build_corpus(
-            close, vol, investor_df, optimal_w
+            close, vol, investor_df, hourly_features, optimal_w
         )
         if corpus is None or len(corpus) < TOP_K:
             return self._insufficient(ticker)
 
         # 현재 패턴 벡터
-        query = _make_vector(close, vol, investor_df, optimal_w, start_idx=len(close) - optimal_w)
+        query = _make_vector(close, vol, investor_df, hourly_features, optimal_w, start_idx=len(close) - optimal_w)
         if query is None:
             return self._insufficient(ticker)
 
@@ -120,20 +134,22 @@ def _optimize_window(
     close: pd.Series,
     vol: pd.Series | None,
     investor_df: pd.DataFrame | None,
+    hourly_features: pd.DataFrame | None = None,
 ) -> int:
     train_close = close.iloc[:-HOLDOUT_DAYS]
     train_vol = vol.iloc[:-HOLDOUT_DAYS] if vol is not None else None
     train_inv = investor_df.iloc[:-HOLDOUT_DAYS] if investor_df is not None else None
+    train_hf = hourly_features.iloc[:-HOLDOUT_DAYS] if hourly_features is not None else None
 
     best_w, best_prec = 20, 0.0
     for w in WINDOW_CANDIDATES:
-        corpus, labels, _ = _build_corpus(train_close, train_vol, train_inv, w)
+        corpus, labels, _ = _build_corpus(train_close, train_vol, train_inv, train_hf, w)
         if corpus is None or len(corpus) < TOP_K + 1:
             continue
         # 마지막 hold-out 기간의 각 포지션을 예측해 정밀도 계산
         precisions = []
         for i in range(max(0, len(train_close) - HOLDOUT_DAYS), len(train_close) - w - FUTURE_DAYS):
-            q = _make_vector(train_close, train_vol, train_inv, w, start_idx=i)
+            q = _make_vector(train_close, train_vol, train_inv, train_hf, w, start_idx=i)
             if q is None:
                 continue
             norms = np.linalg.norm(corpus, axis=1)
@@ -159,12 +175,13 @@ def _build_corpus(
     close: pd.Series,
     vol: pd.Series | None,
     investor_df: pd.DataFrame | None,
+    hourly_features: pd.DataFrame | None,
     w: int,
 ) -> tuple[np.ndarray | None, np.ndarray, np.ndarray]:
     vectors, labels, rets = [], [], []
     n = len(close)
     for i in range(n - w - FUTURE_DAYS):
-        vec = _make_vector(close, vol, investor_df, w, start_idx=i)
+        vec = _make_vector(close, vol, investor_df, hourly_features, w, start_idx=i)
         if vec is None:
             continue
         future_close = close.iloc[i + w: i + w + FUTURE_DAYS]
@@ -187,6 +204,7 @@ def _make_vector(
     close: pd.Series,
     vol: pd.Series | None,
     investor_df: pd.DataFrame | None,
+    hourly_features: pd.DataFrame | None,
     w: int,
     start_idx: int,
 ) -> np.ndarray | None:
@@ -226,6 +244,13 @@ def _make_vector(
                 ratio = np.where(total_abs > 0, net / total_abs, 0.0)
             channels.append(ratio)
 
+    if hourly_features is not None and len(hourly_features) >= end_idx:
+        for col in ("intraday_momentum", "intraday_range"):
+            if col in hourly_features.columns:
+                h_slice = hourly_features[col].iloc[start_idx:end_idx].values.astype(float)
+                if len(h_slice) == w:
+                    channels.append(h_slice)
+
     vec = np.concatenate(channels)
     if not np.isfinite(vec).all():
         vec = np.nan_to_num(vec, nan=0.0, posinf=0.0, neginf=0.0)
@@ -246,20 +271,20 @@ def _grade(confidence: float, similar_count: int) -> str:
 
 # ── 캐시 ─────────────────────────────────────────────────────────────────────
 
-def _load_cache(ticker: str) -> int | None:
+def _load_cache(ticker: str, dim: str = "") -> int | None:
     today = date.today().strftime("%Y%m%d")
     try:
         if CACHE_FILE.exists():
             data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
             entry = data.get(ticker)
-            if entry and entry.get("date") == today:
+            if entry and entry.get("date") == today and entry.get("dim", "") == dim:
                 return int(entry["window"])
     except Exception:
         pass
     return None
 
 
-def _save_cache(ticker: str, window: int) -> None:
+def _save_cache(ticker: str, window: int, dim: str = "") -> None:
     today = date.today().strftime("%Y%m%d")
     try:
         CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -269,7 +294,7 @@ def _save_cache(ticker: str, window: int) -> None:
                 data = json.loads(CACHE_FILE.read_text(encoding="utf-8"))
             except Exception:
                 data = {}
-        data[ticker] = {"window": window, "date": today}
+        data[ticker] = {"window": window, "date": today, "dim": dim}
         CACHE_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     except Exception as e:
         logger.warning("패턴 캐시 저장 실패: %s", e)
@@ -291,6 +316,77 @@ def _fetch_investor(ticker: str, needed_rows: int) -> pd.DataFrame | None:
         return df.tail(needed_rows)
     except Exception as e:
         logger.debug("%s 투자자 데이터 조회 실패 (2ch fallback): %s", ticker, e)
+        return None
+
+
+# ── 60분봉 특성 빌더 ─────────────────────────────────────────────────────────
+
+def _build_hourly_features(
+    daily_index: pd.DatetimeIndex,
+    df_60m: pd.DataFrame | None,
+) -> pd.DataFrame | None:
+    """
+    60분봉을 일봉 타임스텝으로 집계하여 2채널 특성 생성.
+
+    채널:
+    - intraday_momentum: 각 거래일 (마지막캔들종가 - 첫번째캔들종가) / 첫번째캔들종가
+    - intraday_range:    각 거래일 (max고가 - min저가) / 첫번째캔들종가
+
+    반환: columns=['intraday_momentum', 'intraday_range'], index=daily_index (date만)
+    실패 시 None 반환.
+    """
+    if df_60m is None or df_60m.empty:
+        return None
+    try:
+        # 컬럼 정규화 (Close, High, Low 필요)
+        col_map = {}
+        for target, candidates in [
+            ("Close", ("Close", "종가")),
+            ("High",  ("High", "고가")),
+            ("Low",   ("Low", "저가")),
+        ]:
+            for c in candidates:
+                if c in df_60m.columns:
+                    col_map[target] = c
+                    break
+        if len(col_map) < 3:
+            return None
+
+        # 날짜별 그룹화 (index가 DatetimeIndex 가정)
+        df_60m = df_60m.copy()
+        df_60m.index = pd.to_datetime(df_60m.index)
+        grouped = df_60m.groupby(df_60m.index.date)
+
+        records = {}
+        for day, grp in grouped:
+            if len(grp) < 2:
+                continue
+            first_close = float(grp[col_map["Close"]].iloc[0])
+            last_close  = float(grp[col_map["Close"]].iloc[-1])
+            day_high    = float(grp[col_map["High"]].max())
+            day_low     = float(grp[col_map["Low"]].min())
+            if first_close <= 0:
+                continue
+            records[day] = {
+                "intraday_momentum": (last_close - first_close) / first_close,
+                "intraday_range":    (day_high - day_low) / first_close,
+            }
+
+        if not records:
+            return None
+
+        result = pd.DataFrame.from_dict(records, orient="index")
+        result.index = pd.to_datetime(result.index)
+
+        # daily_index의 date와 매핑
+        daily_dates = pd.to_datetime(daily_index).normalize()
+        result = result.reindex(daily_dates)
+        result = result.ffill().fillna(0.0)
+        result.index = daily_index
+
+        return result
+    except Exception as e:
+        logger.debug("60분봉 특성 생성 실패: %s", e)
         return None
 
 

@@ -46,6 +46,7 @@ class BuySignal:
     stop_loss: float        # 참고 손절가
     target_price: float     # 참고 목표가
     risk_reward: float      # 손익비
+    pattern_score: int = 0  # PatternLearningResult 보너스 점수 (0/1/3)
 
 
 @dataclass

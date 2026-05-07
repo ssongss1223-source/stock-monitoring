@@ -28,7 +28,21 @@
       "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\" -File | Where-Object { $_.Extension -in @\\('.csv', '.db', '.json', '.txt', '.md'\\) })",
       "Bash(python backtest/pattern_backtest.py --ticker 005930)",
       "Bash(python backtest/pattern_backtest.py --ticker 005930 --test-start 20250401)",
-      "Bash(python backtest/pattern_backtest.py --ticker 000660 --test-start 20250401)"
+      "Bash(python backtest/pattern_backtest.py --ticker 000660 --test-start 20250401)",
+      "Bash(python -c \"from agents.technical_analysis import TechnicalAnalysisAgent; print\\('OK'\\)\")",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\" -Recurse)",
+      "Bash(Select-Object -First 50)",
+      "Bash(Format-Table -Property Name, FullName -AutoSize)",
+      "Bash(Get-ChildItem -Path \"C:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\" -Recurse -File)",
+      "Bash(Select-Object -ExpandProperty FullName)",
+      "Bash(python debug_single_stock.py)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\KHSong\\\\OneDrive\\\\00_claude_code\\\\2605_stock_monitoring\" -Recurse -Force)",
+      "Bash(Format-Table FullName)",
+      "Bash(Remove-Item \"C:\\\\Users\\\\KHSong\\\\.claude\\\\plans\\\\md-md-greedy-candy.md\")",
+      "PowerShell(Remove-Item \"C:\\\\Users\\\\KHSong\\\\.claude\\\\plans\\\\md-md-greedy-candy.md\")",
+      "Bash(python -c \"from agents.volume_analysis import VolumeAnalysisAgent, VolumeProfileCache; print\\('import OK'\\)\")",
+      "Bash(python scripts/test_kis.py)",
+      "Bash(python main.py --run-now)"
     ]
   }
 }

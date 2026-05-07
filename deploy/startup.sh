@@ -2,7 +2,7 @@
 # VM 최초 1회 실행 — 의존성 설치 + 코드 배포 + systemd 등록
 set -e
 
-REPO_URL="https://github.com/ssongss1223/stock-monitoring.git"  # 본인 repo URL로 변경
+REPO_URL="https://github.com/ssongss1223-source/stock-monitoring.git"
 APP_DIR="/opt/stock-monitor"
 SERVICE_USER="stock"
 

@@ -15,3 +15,7 @@ python-telegram-bot>=20.0
 # 설정 관리
 PyYAML>=6.0
 python-dotenv>=1.0.0
+
+# OHLCV 영속화
+yfinance>=0.2.40
+pyarrow>=14.0.0

@@ -33,11 +33,13 @@ class UniverseManager:
             result = _load_watchlist(today)
         elif self.mode == "top50_mktcap":
             result = _top_by_mktcap(today, 50)
+        elif self.mode == "top100_mktcap":
+            result = _top_by_mktcap(today, 100)
         elif self.mode == "sector_top5":
             result = _sector_top5(today)
         else:
-            logger.warning("알 수 없는 UNIVERSE_MODE: %s → sector_top5로 대체", self.mode)
-            result = _sector_top5(today)
+            logger.warning("알 수 없는 UNIVERSE_MODE: %s → top100_mktcap으로 대체", self.mode)
+            result = _top_by_mktcap(today, 100)
 
         if self.include_watchlist and self.mode != "watchlist":
             existing = {t for t, _ in result}

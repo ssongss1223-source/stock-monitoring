@@ -22,10 +22,11 @@ _ACTION_LABEL = {
     "half_sell": "절반 매도",
     "hold": "보유 유지",
 }
+_PATTERN_GRADE_EMOJI = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}
 
 
 class ReportAgent:
-    """전략서 12장 포맷으로 텔레그램 알림을 발송한다."""
+    """텔레그램 알림 발송 에이전트."""
 
     def __init__(self):
         self.token = config.TELEGRAM_BOT_TOKEN
@@ -37,11 +38,11 @@ class ReportAgent:
         buy_signals: list[BuySignal],
         sell_signals: list[SellSignal],
         pattern_results: list[PatternLearningResult] | None = None,
+        all_analyzed: list[tuple[str, str]] | None = None,
     ) -> bool:
-        message = _build_message(markets, buy_signals, sell_signals, pattern_results)
+        message = _build_message(markets, buy_signals, sell_signals, pattern_results, all_analyzed)
         logger.info("ReportAgent: 메시지 %d자 전송 시도", len(message))
 
-        # Telegram 메시지 4096자 제한 → 필요 시 분할
         chunks = _split(message, 4096)
         success = True
         for chunk in chunks:
@@ -76,21 +77,28 @@ def _build_message(
     buy_signals: list[BuySignal],
     sell_signals: list[SellSignal],
     pattern_results: list[PatternLearningResult] | None = None,
+    all_analyzed: list[tuple[str, str]] | None = None,
 ) -> str:
     parts = [_header(), _market_section(markets)]
 
     if sell_signals:
         parts.append(_sell_section(sell_signals))
 
-    if buy_signals:
-        parts.append(_buy_section(buy_signals))
-    else:
-        parts.append("📭 <b>오늘 매수 추천 없음</b>")
+    # ① 분석대상 전체 종목 목록 (compact)
+    if all_analyzed:
+        buy_tickers = {s.ticker for s in buy_signals}
+        parts.append(_all_stocks_section(all_analyzed, buy_tickers))
 
-    if pattern_results:
-        section = _pattern_section(pattern_results)
-        if section:
-            parts.append(section)
+    # ② 3일내 +3% 이상 상승 예측 종목 요약
+    if buy_signals:
+        parts.append(_prediction_summary_section(buy_signals))
+    else:
+        parts.append("📭 <b>오늘 상승 예측 종목 없음</b>")
+
+    # ③ 상승 예측 종목 상세 정보 (패턴분석 포함)
+    if buy_signals:
+        pr_by_ticker = {pr.ticker: pr for pr in (pattern_results or [])}
+        parts.append(_buy_detail_section(buy_signals, pr_by_ticker))
 
     return "\n\n".join(parts)
 
@@ -98,7 +106,7 @@ def _build_message(
 def _header() -> str:
     from datetime import date
     today = date.today().strftime("%Y-%m-%d")
-    return f"📈 <b>주식 신호 알림 — {today}</b>"
+    return f"📈 <b>주식 신호 알림 — {today}</b>\n  전일 종가 기준 | KST 08:00"
 
 
 def _market_section(markets: dict[str, MarketContext]) -> str:
@@ -126,45 +134,69 @@ def _sell_section(signals: list[SellSignal]) -> str:
     return "\n".join(lines)
 
 
-def _buy_section(signals: list[BuySignal]) -> str:
-    # S → A → B 순 정렬
+def _all_stocks_section(
+    all_analyzed: list[tuple[str, str]],
+    buy_tickers: set[str],
+) -> str:
+    total = len(all_analyzed)
+    lines = [f"📋 <b>분석대상 전체 ({total}종목)</b>  ⭐=상승예측"]
+
+    row: list[str] = []
+    for ticker, name in all_analyzed:
+        prefix = "⭐" if ticker in buy_tickers else ""
+        row.append(f"{prefix}{name}")
+        if len(row) == 5:
+            lines.append("  ".join(row))
+            row = []
+    if row:
+        lines.append("  ".join(row))
+
+    return "\n".join(lines)
+
+
+def _prediction_summary_section(signals: list[BuySignal]) -> str:
     grade_order = {"S": 0, "A": 1, "B": 2}
     sorted_signals = sorted(signals, key=lambda s: (grade_order.get(s.grade, 9), -s.total_score))
 
-    lines = ["📌 <b>매수 추천</b>"]
+    count = len(sorted_signals)
+    lines = [f"🎯 <b>3일내 +3% 이상 상승 예측 종목 ({count}종목)</b>"]
+    for s in sorted_signals:
+        em = _GRADE_EMOJI.get(s.grade, "")
+        upside = round((s.target_price / s.current_price - 1) * 100, 1) if s.current_price > 0 else 0
+        lines.append(f"{em} [{s.grade}급] <b>{s.name}</b> ({s.ticker}) — 목표 +{upside}%")
+    return "\n".join(lines)
+
+
+def _buy_detail_section(
+    signals: list[BuySignal],
+    pr_by_ticker: dict[str, PatternLearningResult],
+) -> str:
+    grade_order = {"S": 0, "A": 1, "B": 2}
+    sorted_signals = sorted(signals, key=lambda s: (grade_order.get(s.grade, 9), -s.total_score))
+
+    lines = ["📊 <b>상승예측 종목 상세</b>"]
     for s in sorted_signals:
         em = _GRADE_EMOJI.get(s.grade, "")
         pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
-        lines.append(
+        pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
+        entry = (
             f"\n{em} <b>[{s.grade}급] {s.name} ({s.ticker})</b>\n"
-            f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}\n"
+            f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
             f"  현재가: {s.current_price:,.0f}원\n"
             f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
             f"  손익비: 약 1:{s.risk_reward}"
         )
-    return "\n".join(lines)
+        pr = pr_by_ticker.get(s.ticker)
+        if pr and pr.grade != "INSUFFICIENT":
+            pr_em = _PATTERN_GRADE_EMOJI.get(pr.grade, "⚪")
+            ret_str = f"+{pr.avg_return_5d:.1f}%" if pr.avg_return_5d >= 0 else f"{pr.avg_return_5d:.1f}%"
+            entry += (
+                f"\n  {pr_em} 패턴분석: {pr.grade} | "
+                f"성공률 {pr.pattern_confidence * 100:.0f}% | "
+                f"유사패턴 {pr.similar_count}개 | 평균수익률 {ret_str}"
+            )
+        lines.append(entry)
 
-
-_PATTERN_GRADE_EMOJI = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}
-_PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
-
-
-def _pattern_section(results: list[PatternLearningResult]) -> str:
-    visible = [r for r in results if r.grade != "INSUFFICIENT"]
-    if not visible:
-        return ""
-    visible.sort(key=lambda r: (_PATTERN_GRADE_ORDER.get(r.grade, 9), -r.pattern_confidence))
-    lines = ["📊 <b>종목별 패턴 분석 (5일 +5% 기준)</b>"]
-    for r in visible:
-        em = _PATTERN_GRADE_EMOJI.get(r.grade, "⚪")
-        ret_str = f"+{r.avg_return_5d:.1f}%" if r.avg_return_5d >= 0 else f"{r.avg_return_5d:.1f}%"
-        lines.append(
-            f"{em} <b>{r.ticker}</b>: {r.grade} | "
-            f"성공률 {r.pattern_confidence * 100:.0f}% | "
-            f"유사패턴 {r.similar_count}개 | "
-            f"평균수익률 {ret_str} | "
-            f"W={r.optimal_window} | {r.pattern_dim}"
-        )
     return "\n".join(lines)
 
 

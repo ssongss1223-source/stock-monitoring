@@ -13,6 +13,7 @@ from agents.technical_analysis import TechnicalAnalysisAgent
 from agents.universe_manager import UniverseManager
 from agents.volume_analysis import VolumeAnalysisAgent
 from core.scoring_engine import ScoringEngine
+from data.store import HourlyStore, OhlcvStore
 from models.signals import BuySignal, MarketContext, PatternLearningResult
 
 logger = logging.getLogger(__name__)
@@ -70,6 +71,7 @@ class Orchestrator:
         ]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        all_analyzed: list[tuple[str, str]] = []  # (ticker, name) 전체 분석 종목
         buy_signals: list[BuySignal] = []
         pattern_results: list[PatternLearningResult] = []
         errs = []
@@ -77,7 +79,8 @@ class Orchestrator:
             if isinstance(r, Exception):
                 errs.append(r)
             elif isinstance(r, tuple):
-                bs, pr = r
+                tk, nm, bs, pr = r
+                all_analyzed.append((tk, nm))
                 if bs is not None:
                     buy_signals.append(bs)
                 pattern_results.append(pr)
@@ -87,7 +90,7 @@ class Orchestrator:
 
         # ── 4. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
-        await self.report_agent.send(markets, buy_signals, sell_signals, pattern_results)
+        await self.report_agent.send(markets, buy_signals, sell_signals, pattern_results, all_analyzed)
 
     async def _analyze_stock(
         self,
@@ -95,27 +98,53 @@ class Orchestrator:
         market_name: str,
         markets: dict[str, MarketContext],
         semaphore: asyncio.Semaphore,
-    ) -> tuple[BuySignal | None, PatternLearningResult]:
+    ) -> tuple[str, str, BuySignal | None, PatternLearningResult]:
         async with semaphore:
+            loop = asyncio.get_running_loop()
             market_ctx = markets.get(market_name, markets.get("KOSPI"))
+            name = _get_name(ticker)
+
+            # ── 1. 일봉 영속 로드 (증분 업데이트) ──
+            df_daily = await loop.run_in_executor(
+                None, OhlcvStore.fetch_and_update_daily, ticker
+            )
+
+            # ── 2. 60분봉 영속 로드 (실패해도 계속) ──
+            try:
+                df_60m = await loop.run_in_executor(
+                    None, HourlyStore.fetch_and_update_hourly, ticker, market_name
+                )
+            except Exception:
+                df_60m = None
+
+            # ── 3. 기술/거래량 분석 (영속 데이터 재사용) ──
             tech_agent = TechnicalAnalysisAgent(self.engine)
             vol_agent = VolumeAnalysisAgent(self.engine)
 
             try:
                 tech, vol = await asyncio.wait_for(
-                    asyncio.gather(tech_agent.run(ticker), vol_agent.run(ticker)),
+                    asyncio.gather(
+                        tech_agent.run(ticker, df=df_daily),
+                        vol_agent.run(ticker, df=df_daily, df_60m=df_60m),
+                    ),
                     timeout=20.0,
                 )
             except asyncio.TimeoutError:
                 logger.warning("%s 분석 타임아웃(20s) — 건너뜀", ticker)
-                return None, StockPatternLearner._insufficient(ticker)
+                return ticker, name, None, StockPatternLearner._insufficient(ticker)
 
+            # ── 4. 패턴학습 (60분봉 채널 포함) ──
             pattern_learner = StockPatternLearner()
-            pattern_result = await pattern_learner.run(ticker, df=tech_agent.last_df)
+            pattern_result = await pattern_learner.run(
+                ticker, df=df_daily if df_daily is not None else tech_agent.last_df, df_60m=df_60m
+            )
 
-            name = _get_name(ticker)
-            buy_signal = self.buy_agent.evaluate(ticker, name, tech, vol, market_ctx)
-            return buy_signal, pattern_result
+            # ── 5. 매수신호 (패턴 보너스 반영) ──
+            buy_signal = self.buy_agent.evaluate(
+                ticker, name, tech, vol, market_ctx,
+                pattern_result=pattern_result,
+            )
+            return ticker, name, buy_signal, pattern_result
 
 
 def _get_name(ticker: str) -> str:

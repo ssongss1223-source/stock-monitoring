@@ -54,6 +54,7 @@ class ScoringEngine:
         flags 키: vol_5d_above_20d, vol_consecutive_3d, vol_rise_price_flat,
                   obv_uptrend_price_flat, vol_vs_52w_low_2x,
                   foreign_inst_buy, foreign_inst_sell, short_interest_declining,
+                  vol_trending_w_price, price_vol_bullish_corr,
                   ticker
         """
         from models.signals import VolumeResult

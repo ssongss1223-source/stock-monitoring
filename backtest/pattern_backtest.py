@@ -117,7 +117,8 @@ def run_backtest(
         for g in ("HIGH", "MEDIUM", "LOW", "INSUFFICIENT")
     }
 
-    test_dates = []
+    first_test_date = str(close.index[test_start].date()) if test_start < len(close) else "N/A"
+    last_test_date = "N/A"
     for i in range(test_start, len(close) - optimal_w - future_days):
         q = _make_vector(close, vol, investor_df, optimal_w, start_idx=i)
         if q is None:
@@ -145,15 +146,15 @@ def run_backtest(
         grade_stats[grade]["total"] += 1
         grade_stats[grade]["success"] += success
         grade_stats[grade]["returns"].append(ret)
-        test_dates.append(close.index[i + optimal_w - 1])
+        last_test_date = str(close.index[i].date())
 
     total_tested = sum(v["total"] for v in grade_stats.values())
     if total_tested == 0:
         print("테스트 포지션 없음")
         return
 
-    date_start = str(test_dates[0].date()) if test_dates else "N/A"
-    date_end = str(test_dates[-1].date()) if test_dates else "N/A"
+    date_start = first_test_date
+    date_end = last_test_date
 
     print(f"\n{'═' * 55}")
     print(f"패턴 백테스트 결과: {ticker} ({name})  선택 윈도우: W={optimal_w}  패턴채널: {dim_label}")
@@ -198,11 +199,26 @@ def _grade(confidence: float, similar_count: int) -> str:
 
 
 if __name__ == "__main__":
+    import json
+
     parser = argparse.ArgumentParser(description="종목별 패턴 학습 백테스트")
-    parser.add_argument("--ticker", required=True, help="종목 코드 (예: 005930)")
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--ticker", help="종목 코드 (예: 005930)")
+    group.add_argument("--watchlist", action="store_true", help="data/watchlist.json 전체 종목 실행")
     parser.add_argument("--train-days", type=int, default=400, help="훈련 기간 거래일 수 (기본: 400)")
     parser.add_argument("--threshold", type=float, default=SUCCESS_THRESHOLD, help=f"성공 기준 수익률 (기본: {SUCCESS_THRESHOLD})")
     parser.add_argument("--future-days", type=int, default=FUTURE_DAYS, help=f"미래 관측 기간 (기본: {FUTURE_DAYS})")
     parser.add_argument("--test-start", type=str, default=None, help="테스트 시작일 YYYYMMDD (예: 20250401)")
     args = parser.parse_args()
-    run_backtest(args.ticker, args.train_days, args.threshold, args.future_days, args.test_start)
+
+    if args.watchlist:
+        watchlist_path = Path(__file__).parent.parent / "data" / "watchlist.json"
+        tickers = json.loads(watchlist_path.read_text(encoding="utf-8")).get("stocks", [])
+        if not tickers:
+            print("watchlist.json에 종목이 없습니다.")
+            sys.exit(1)
+        print(f"watchlist 종목 {len(tickers)}개: {tickers}")
+        for t in tickers:
+            run_backtest(t, args.train_days, args.threshold, args.future_days, args.test_start)
+    else:
+        run_backtest(args.ticker, args.train_days, args.threshold, args.future_days, args.test_start)

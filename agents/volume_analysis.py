@@ -1,156 +1,297 @@
 import asyncio
+import json
 import logging
+import threading
 from datetime import date, timedelta
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 from pykrx import stock
 
+import config as _cfg
 from core.scoring_engine import ScoringEngine
 from models.signals import VolumeResult
 
 logger = logging.getLogger(__name__)
 
+_CACHE_LOCK = threading.Lock()
+
+
+class VolumeProfileCache:
+    """종목별 시간대별 거래량 분포 캐시 (당일 1회 갱신).
+
+    캐시 구조 per ticker:
+    {
+        "date": "20260507",
+        "hourly": {
+            "9":  {"p90": ..., "p95": ..., "p99": ..., "mean": ...},
+            "10": {...}, ...
+        },
+        "daily_turnover_p80": 5000000000.0
+    }
+    """
+
+    _cache: dict = {}
+    _loaded: bool = False
+
+    @classmethod
+    def get_or_update(cls, ticker: str, df_60m: pd.DataFrame) -> dict:
+        with _CACHE_LOCK:
+            cls._load()
+            today_str = date.today().strftime("%Y%m%d")
+            entry = cls._cache.get(ticker, {})
+            if entry.get("date") == today_str:
+                return entry
+            profile = cls._compute(df_60m)
+            profile["date"] = today_str
+            cls._cache[ticker] = profile
+            cls._save()
+            return profile
+
+    @classmethod
+    def _load(cls) -> None:
+        if cls._loaded:
+            return
+        p = Path(_cfg.VOLUME_PROFILE_CACHE)
+        if p.exists():
+            try:
+                cls._cache = json.loads(p.read_text(encoding="utf-8"))
+            except Exception:
+                cls._cache = {}
+        cls._loaded = True
+
+    @classmethod
+    def _compute(cls, df_60m: pd.DataFrame) -> dict:
+        """시간대별 P90/P95/P99/mean + 일별 거래대금 P80 계산."""
+        result: dict = {"hourly": {}, "daily_turnover_p80": 0.0}
+        vol_name = _col(df_60m, ("Volume", "거래량"))
+        close_name = _col(df_60m, ("Close", "종가"))
+        if vol_name is None:
+            return result
+
+        df = df_60m[[c for c in [vol_name, close_name] if c]].copy()
+        df.index = pd.to_datetime(df.index)
+        df["_hour"] = df.index.hour
+        df["_vol"] = df[vol_name].astype(float)
+
+        # 시간대별 거래량 분포
+        for hour, grp in df.groupby("_hour"):
+            vols = grp["_vol"].dropna()
+            if len(vols) >= 5:
+                result["hourly"][str(hour)] = {
+                    "p90": float(vols.quantile(0.90)),
+                    "p95": float(vols.quantile(0.95)),
+                    "p99": float(vols.quantile(0.99)),
+                    "mean": float(vols.mean()),
+                }
+
+        # 일별 거래대금 P80
+        if close_name:
+            df["_tv"] = df[close_name].astype(float) * df["_vol"]
+        else:
+            df["_tv"] = df["_vol"]
+        df["_date"] = df.index.normalize()
+        daily_tv = df.groupby("_date")["_tv"].sum()
+        if len(daily_tv) >= 5:
+            result["daily_turnover_p80"] = float(daily_tv.quantile(0.80))
+
+        return result
+
+    @classmethod
+    def _save(cls) -> None:
+        try:
+            p = Path(_cfg.VOLUME_PROFILE_CACHE)
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(
+                json.dumps(cls._cache, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.warning("VolumeProfileCache 저장 실패: %s", e)
+
 
 class VolumeAnalysisAgent:
-    """전략서 5장: 거래량 폭발 예측 + OBV + 수급 분석."""
+    """60분봉 기반 종목별 거래량 행동 프로파일링.
+
+    종목마다 자신의 60분봉 히스토리에서 시간대별 P90/P95/P99를 산출하여
+    고유 임계값으로 이상 수급 이벤트를 탐지한다.
+    df_60m 없으면 volume_score=0 반환.
+    """
 
     def __init__(self, engine: ScoringEngine):
         self.engine = engine
 
-    async def run(self, ticker: str) -> VolumeResult:
+    async def run(
+        self,
+        ticker: str,
+        df: pd.DataFrame | None = None,
+        df_60m: pd.DataFrame | None = None,
+    ) -> VolumeResult:
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(None, self._analyze, ticker)
+        return await loop.run_in_executor(None, self._analyze, ticker, df_60m)
 
-    def _analyze(self, ticker: str) -> VolumeResult:
+    def _analyze(self, ticker: str, df_60m: pd.DataFrame | None) -> VolumeResult:
+        if df_60m is None or df_60m.empty:
+            logger.warning("%s 60분봉 데이터 없음 — volume_score=0", ticker)
+            return _empty(ticker)
+
         today = _today()
+
         try:
-            df = stock.get_market_ohlcv_by_date(_ago(90), today, ticker)
+            profile = VolumeProfileCache.get_or_update(ticker, df_60m)
         except Exception as e:
-            logger.warning("%s OHLCV 조회 실패: %s", ticker, e)
+            logger.warning("%s 프로파일 캐시 오류: %s", ticker, e)
+            profile = {}
+
+        last_day = _last_day_df(df_60m)
+        if last_day is None or last_day.empty:
             return _empty(ticker)
 
-        if df is None or df.empty or len(df) < 21:
-            return _empty(ticker)
-
-        close = _series(df, ("종가", "Close"))
-        vol = _series(df, ("거래량", "Volume"))
-        if close is None or vol is None:
-            return _empty(ticker)
-
-        obv = _compute_obv(close, vol)
         fi_buy, fi_sell = _foreign_inst_flow(ticker, today)
 
         flags = {
             "ticker": ticker,
-            "vol_5d_above_20d": _vol_5d_above_20d(vol),
-            "vol_consecutive_3d": _vol_consecutive_3d(vol),
-            "vol_rise_price_flat": _vol_rise_price_flat(vol, close),
-            "obv_uptrend_price_flat": _obv_uptrend_price_flat(obv, close),
-            "vol_vs_52w_low_2x": _vol_vs_52w_low(vol, ticker, today),
+            "hourly_vol_ratio_p95": _same_time_vol_ratio(last_day, profile),
+            "hourly_vol_zscore_high": _volume_zscore_60m(df_60m, last_day),
+            "relative_turnover_high": _relative_turnover_60m(last_day, profile),
+            "vwap_above_60m": _vwap_above_60m(last_day),
+            "obv_slope_up_60m": _obv_slope_60m(df_60m),
             "foreign_inst_buy": fi_buy,
             "foreign_inst_sell": fi_sell,
-            "short_interest_declining": _short_declining(ticker, today),
         }
         return self.engine.score_volume(flags)
 
 
-# ── 조건 판별 함수 ────────────────────────────────────────────────────────────
+# ── 60분봉 Feature 함수 ────────────────────────────────────────────────────────
 
-def _vol_5d_above_20d(vol: pd.Series) -> bool:
-    if len(vol) < 20:
+def _same_time_vol_ratio(last_day: pd.DataFrame, profile: dict) -> bool:
+    """마지막 거래일 내 어느 봉이든 동일 시간대 P95 초과 시 True."""
+    vol_name = _col(last_day, ("Volume", "거래량"))
+    if vol_name is None or last_day.empty:
         return False
-    return float(vol.iloc[-5:].mean()) > float(vol.iloc[-20:].mean())
+    hourly = profile.get("hourly", {})
+    for ts, row in last_day.iterrows():
+        slot = hourly.get(str(ts.hour), {})
+        p95 = slot.get("p95")
+        if p95 is None:
+            continue
+        if float(row[vol_name]) >= p95:
+            return True
+    return False
 
 
-def _vol_consecutive_3d(vol: pd.Series) -> bool:
-    if len(vol) < 3:
+def _volume_zscore_60m(
+    df_60m: pd.DataFrame, last_day: pd.DataFrame, threshold: float = 2.0
+) -> bool:
+    """마지막 거래일 최대 거래량의 z-score >= threshold (과거 분포 기준)."""
+    vol_name = _col(df_60m, ("Volume", "거래량"))
+    if vol_name is None or last_day.empty:
         return False
-    return (float(vol.iloc[-1]) > float(vol.iloc[-2])) and (float(vol.iloc[-2]) > float(vol.iloc[-3]))
 
+    all_idx = pd.to_datetime(df_60m.index)
+    last_norm = pd.to_datetime(last_day.index).normalize().min()
+    hist_mask = all_idx.normalize() < last_norm
+    hist_vol = df_60m.loc[hist_mask, vol_name].astype(float)
 
-def _vol_rise_price_flat(vol: pd.Series, close: pd.Series, window: int = 10) -> bool:
-    """주가 횡보(변동 3% 미만) + 거래량 우상향."""
-    if len(vol) < window or len(close) < window:
+    if len(hist_vol) < 10:
         return False
-    c = close.iloc[-window:]
-    price_range = (float(c.max()) - float(c.min())) / float(c.min())
-    vol_rising = float(vol.iloc[-1]) > float(vol.iloc[-window])
-    return price_range < 0.03 and vol_rising
-
-
-def _obv_uptrend_price_flat(obv: pd.Series, close: pd.Series, window: int = 10) -> bool:
-    if len(obv) < window or len(close) < window:
+    mean = float(hist_vol.mean())
+    std = float(hist_vol.std())
+    if std == 0:
         return False
-    c = close.iloc[-window:]
-    price_range = (float(c.max()) - float(c.min())) / float(c.min())
-    obv_rising = float(obv.iloc[-1]) > float(obv.iloc[-window])
-    return price_range < 0.03 and obv_rising
+    max_vol = float(last_day[vol_name].astype(float).max())
+    return (max_vol - mean) / std >= threshold
 
 
-def _vol_vs_52w_low(vol: pd.Series, ticker: str, today: str) -> bool:
-    """최근 5일 평균 거래량 ≥ 52주 저거래량 구간 평균의 2배."""
+def _relative_turnover_60m(last_day: pd.DataFrame, profile: dict) -> bool:
+    """마지막 거래일 거래대금 합이 과거 P80 이상."""
+    vol_name = _col(last_day, ("Volume", "거래량"))
+    close_name = _col(last_day, ("Close", "종가"))
+    if vol_name is None or last_day.empty:
+        return False
+    p80 = profile.get("daily_turnover_p80", 0.0)
+    if p80 == 0:
+        return False
+    if close_name:
+        tv = float(
+            (last_day[close_name].astype(float) * last_day[vol_name].astype(float)).sum()
+        )
+    else:
+        tv = float(last_day[vol_name].astype(float).sum())
+    return tv >= p80
+
+
+def _vwap_above_60m(last_day: pd.DataFrame) -> bool:
+    """마지막 봉 종가 > 당일 VWAP."""
+    close_name = _col(last_day, ("Close", "종가"))
+    vol_name = _col(last_day, ("Volume", "거래량"))
+    if close_name is None or vol_name is None or last_day.empty:
+        return False
+    closes = last_day[close_name].astype(float)
+    vols = last_day[vol_name].astype(float)
+    total_vol = float(vols.sum())
+    if total_vol == 0:
+        return False
+    vwap = float((closes * vols).sum()) / total_vol
+    return float(closes.iloc[-1]) > vwap
+
+
+def _obv_slope_60m(df_60m: pd.DataFrame, window: int = 20) -> bool:
+    """최근 window개 60분봉 OBV 선형 기울기 양수."""
+    close_name = _col(df_60m, ("Close", "종가"))
+    vol_name = _col(df_60m, ("Volume", "거래량"))
+    if close_name is None or vol_name is None or len(df_60m) < window:
+        return False
+    recent = df_60m.tail(window)
+    close = recent[close_name].astype(float)
+    vol = recent[vol_name].astype(float)
+    direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    obv = (direction * vol).cumsum()
+    x = np.arange(len(obv))
     try:
-        df_52w = stock.get_market_ohlcv_by_date(_ago(365), today, ticker)
-        if df_52w is None or df_52w.empty:
-            return False
-        vol_52w = _series(df_52w, ("거래량", "Volume"))
-        if vol_52w is None or len(vol_52w) < 20:
-            return False
-        low_avg = float(vol_52w[vol_52w <= vol_52w.quantile(0.2)].mean())
-        recent_avg = float(vol.iloc[-5:].mean())
-        return recent_avg >= low_avg * 2
+        slope = float(np.polyfit(x, obv.values, 1)[0])
     except Exception:
         return False
+    return slope > 0
 
+
+# ── 수급 (pykrx 일봉 기반 유지) ───────────────────────────────────────────────
 
 def _foreign_inst_flow(ticker: str, today: str) -> tuple[bool, bool]:
-    """(외국인/기관 순매수 여부, 순매도 여부). 최근 5거래일 합산.
-    pykrx 1.2.8에서 detail=True 엔드포인트 불안정 → 실패 시 (False, False) 반환.
-    """
-    try:
-        df = stock.get_market_trading_value_by_date(_ago(10), today, ticker, detail=True)
-        if df is None or df.empty or len(df.columns) == 0:
-            return False, False
-        for col in ("외국인합계", "외국인"):
-            if col in df.columns:
-                net = float(df[col].iloc[-5:].sum())
-                return net > 0, net < 0
-        return False, False
-    except Exception:
-        return False, False
-
-
-def _short_declining(ticker: str, today: str) -> bool:
-    """공매도 잔량 최근 감소 추세.
-    pykrx 1.2.8에서 해당 엔드포인트 불안정 → 실패 시 False 반환.
-    """
-    try:
-        df = stock.get_shorting_balance_by_date(_ago(30), today, ticker)
-        if df is None or df.empty or len(df) < 5 or len(df.columns) == 0:
-            return False
-        for col in ("잔량", "shortBalance", "공매도잔량"):
-            if col in df.columns:
-                return float(df[col].iloc[-1]) < float(df[col].iloc[-5])
-        return False
-    except Exception:
-        return False
-
-
-# ── 지표 계산 ─────────────────────────────────────────────────────────────────
-
-def _compute_obv(close: pd.Series, volume: pd.Series) -> pd.Series:
-    direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
-    return (direction * volume).cumsum()
+    """외국인/기관 순매수/순매도 여부. 최근 5거래일 합산. 2단계 fallback."""
+    _FOREIGN_COLS = ("외국인합계", "외국인", "기관합계", "투신")
+    for use_detail in (True, False):
+        try:
+            kw = {"detail": True} if use_detail else {}
+            df = stock.get_market_trading_value_by_date(_ago(10), today, ticker, **kw)
+            if df is not None and not df.empty:
+                for col in _FOREIGN_COLS:
+                    if col in df.columns:
+                        net = float(df[col].iloc[-5:].sum())
+                        return net > 0, net < 0
+        except Exception:
+            pass
+    logger.warning("%s 수급 API 실패 — 외국인/기관 점수 0 처리", ticker)
+    return False, False
 
 
 # ── 유틸 ─────────────────────────────────────────────────────────────────────
 
-def _series(df: pd.DataFrame, candidates: tuple) -> pd.Series | None:
-    for col in candidates:
-        if col in df.columns:
-            return df[col].astype(float)
+def _col(df: pd.DataFrame, candidates: tuple) -> str | None:
+    for c in candidates:
+        if c in df.columns:
+            return c
     return None
+
+
+def _last_day_df(df_60m: pd.DataFrame) -> pd.DataFrame | None:
+    """df_60m에서 마지막 거래일 데이터만 추출."""
+    idx = pd.to_datetime(df_60m.index)
+    last_norm = idx.normalize().max()
+    result = df_60m[idx.normalize() == last_norm].copy()
+    result.index = pd.to_datetime(result.index)
+    return result if not result.empty else None
 
 
 def _empty(ticker: str) -> VolumeResult:

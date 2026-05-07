@@ -2,21 +2,21 @@ version: "1.0"
 description: "매수 등급 기준 (전략서 11장). market_bias는 임계값에 더해진다."
 
 # trend_score = TechnicalResult.total_score (MA + 일목균형표)
-# volume_score = VolumeResult.volume_score
+# volume_score = VolumeResult.volume_score  (60분봉 기반, 최대 20점)
 
 grade_S:
   trend_min: 12       # + market_bias 후 실효 임계값: bull=12 / sideways=14 / bear=17
-  volume_min: 12
-  pattern_required: true  # 패턴 없으면 S 불가
+  volume_min: 10      # 최대 20점 기준 50% — 이상 수급 + 스마트머니 동반 필요
+  pattern_required: true
 
 grade_A:
   trend_min: 8        # + market_bias 후: bull=8 / sideways=10 / bear=13
-  volume_min: 8
+  volume_min: 7       # 최대 20점 기준 35%
   pattern_required: false
 
 grade_B:
   trend_min: 5        # + market_bias 후: bull=5 / sideways=7 / bear=10
-  volume_min: 5
+  volume_min: 4       # 최대 20점 기준 20%
   pattern_required: false
 
 # 장세별 등급 임계값 페널티 (market.yaml의 market_bias와 일치해야 함)
