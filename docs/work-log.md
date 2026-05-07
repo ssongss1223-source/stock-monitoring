@@ -89,6 +89,36 @@
 - 메모: 손절 생존 필터(max_drawdown >= -5%)가 승률 차이를 크게 만듦. 리스크 관리가 핵심.
 - 다음 아이디어: feature별 lift 분석으로 volume 중복 문제 정량화
 
+## 2026-05-07 세션 18 — 옵션 A 구현 + 텔레그램 S등급 필터
+
+- 작업: `--universe live` 플래그 구현, 텔레그램 S등급 전용 필터 추가
+- 변경 사항:
+  - `backtest/validator.py`:
+    - `_load_all_ohlcv(tickers=None)`: ticker 필터 지원 (IN 절 동적 생성)
+    - `build_matrix(..., tickers=None)`: 시그니처 확장, 내부 변수 `tickers_actual`로 명명 충돌 방지
+    - `main()`: `--universe live` 인자 추가 → `UniverseManager().get_universe()` 호출
+  - `backtest/optimizer.py`:
+    - `main()`: 동일 패턴으로 `--universe live` 추가
+  - `agents/orchestrator.py`:
+    - S등급만 필터(`s_grade_signals`) 후 `report_agent.send()` 전달. A/B등급은 로그에만 집계
+- 관련 파일: `backtest/validator.py`, `backtest/optimizer.py`, `agents/orchestrator.py`
+- 메모:
+  - S등급 필터는 orchestrator 레벨에서 처리 — buy_signal 생성 로직은 변경 없음
+  - `--universe live`는 pykrx API 호출 필요 (VM에서만 실행 권장)
+- 다음 아이디어: GCP push 후 `--universe live` 실행, 전체 vs 운영 유니버스 lift 순위 비교
+
+## 2026-05-07 세션 17 — 운영 유니버스 한정 lift 분석 방향 결정
+
+- 작업: 옵션 A/B 설계 및 플랜 작성
+- 변경 사항: `.claude/plans/100-105-serene-riddle.md` 신규 작성 (코드 변경 없음)
+- 관련 파일: `backtest/validator.py`, `backtest/optimizer.py`, `agents/universe_manager.py`
+- 메모:
+  - 파라미터 3종류 정의: ① feature 점수(technical.yaml) ② 등급 임계값(buy_grade.yaml) ③ 지표 window(코드 하드코딩)
+  - 현재 가중치는 전체 ~350종목 기준. 운영 대상(시총 상위 100)은 특성이 달라 재검증 필요
+  - 옵션 A: `--universe live` 추가로 pykrx API → top100_mktcap+watchlist 필터링 후 lift 재계산
+  - 옵션 B(이후): 종목별 개별 파라미터. YAML 구조 + ScoringEngine 수정 필요, 복잡도 높음
+- 다음 아이디어: 옵션 A 구현 후 전체 vs 운영 유니버스 lift 순위 차이 비교
+
 ## 2026-05-07 세션 16 — Validator + Optimizer + Scoring 가중치 조정
 
 - 작업: feature lift 분석 → 조합 최적화 → scoring 가중치 데이터 기반 조정

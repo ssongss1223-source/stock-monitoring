@@ -90,7 +90,9 @@ class Orchestrator:
 
         # ── 4. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
-        await self.report_agent.send(markets, buy_signals, sell_signals, pattern_results, all_analyzed)
+        s_grade_signals = [s for s in buy_signals if s.grade == "S"]
+        logger.info("텔레그램 발송: S등급 %d종목 (전체 매수신호 %d종목)", len(s_grade_signals), len(buy_signals))
+        await self.report_agent.send(markets, s_grade_signals, sell_signals, pattern_results, all_analyzed)
 
     async def _analyze_stock(
         self,

@@ -130,12 +130,20 @@ def main():
     p.add_argument("--n-dates", type=int, default=12)
     p.add_argument("--top-features", type=int, default=6)
     p.add_argument("--min-samples", type=int, default=30)
+    p.add_argument("--universe", choices=["live"], default=None,
+                   help="live: 운영 유니버스(100~105종목)로 한정. 미지정 시 전체 종목.")
     args = p.parse_args()
 
     dates = sample_dates(args.n_dates)
     print(f"날짜 ({len(dates)}개): {dates}")
 
-    matrix = build_matrix(dates, args.days, args.pct)
+    universe_tickers: list[str] | None = None
+    if args.universe == "live":
+        from agents.universe_manager import UniverseManager
+        universe_tickers = [t for t, _ in UniverseManager().get_universe()]
+        print(f"운영 유니버스 {len(universe_tickers)}종목으로 한정")
+
+    matrix = build_matrix(dates, args.days, args.pct, tickers=universe_tickers)
     base_rate = matrix["label"].mean()
     print(f"\n전체 샘플: {len(matrix):,}건  기준선: {base_rate:.1%}")
 

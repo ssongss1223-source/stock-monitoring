@@ -52,12 +52,20 @@ def sample_dates(n: int = 12, exclude_recent_biz: int = 7) -> list[str]:
     return [thursdays[int(i * step)] for i in range(n)]
 
 
-def _load_all_ohlcv() -> pd.DataFrame:
+def _load_all_ohlcv(tickers: list[str] | None = None) -> pd.DataFrame:
     conn = get_conn(read_only=True)
     try:
-        df = conn.execute(
-            "SELECT ticker, date, open, high, low, close, volume FROM ohlcv_daily ORDER BY ticker, date"
-        ).df()
+        if tickers:
+            placeholders = ", ".join("?" * len(tickers))
+            df = conn.execute(
+                f"SELECT ticker, date, open, high, low, close, volume "
+                f"FROM ohlcv_daily WHERE ticker IN ({placeholders}) ORDER BY ticker, date",
+                tickers,
+            ).df()
+        else:
+            df = conn.execute(
+                "SELECT ticker, date, open, high, low, close, volume FROM ohlcv_daily ORDER BY ticker, date"
+            ).df()
     finally:
         conn.close()
     df["date"] = pd.to_datetime(df["date"])
@@ -88,17 +96,22 @@ def _compute_features(df_slice: pd.DataFrame) -> dict:
     return feat
 
 
-def build_matrix(dates: list[str], hold_days: int, target_pct: float) -> pd.DataFrame:
-    """날짜 리스트 × 전체 종목 → feature + label 행렬."""
-    df_all = _load_all_ohlcv()
+def build_matrix(
+    dates: list[str],
+    hold_days: int,
+    target_pct: float,
+    tickers: list[str] | None = None,
+) -> pd.DataFrame:
+    """날짜 리스트 × 종목 → feature + label 행렬. tickers=None이면 전체 종목."""
+    df_all = _load_all_ohlcv(tickers)
     groups = {t: g.reset_index(drop=True) for t, g in df_all.groupby("ticker")}
-    tickers = list(groups.keys())
+    tickers_actual = list(groups.keys())
 
     rows = []
     for d in dates:
         d_ts = pd.Timestamp(d)
 
-        pairs = [(t, d) for t in tickers]
+        pairs = [(t, d) for t in tickers_actual]
         labels_df = label_batch(pairs, hold_days, target_pct)
         if labels_df.empty:
             logger.warning("레이블 없음: %s", d)
@@ -106,7 +119,7 @@ def build_matrix(dates: list[str], hold_days: int, target_pct: float) -> pd.Data
         label_map = dict(zip(labels_df["ticker"], labels_df["label"]))
 
         n_ok = 0
-        for ticker in tickers:
+        for ticker in tickers_actual:
             label = label_map.get(ticker)
             if label is None:
                 continue
@@ -161,12 +174,20 @@ def main():
     p.add_argument("--pct", type=float, default=0.03)
     p.add_argument("--n-dates", type=int, default=12)
     p.add_argument("--dates", help="comma-separated YYYY-MM-DD")
+    p.add_argument("--universe", choices=["live"], default=None,
+                   help="live: 운영 유니버스(100~105종목)로 한정. 미지정 시 전체 종목.")
     args = p.parse_args()
 
     dates = args.dates.split(",") if args.dates else sample_dates(args.n_dates)
     print(f"분석 날짜 ({len(dates)}개): {dates}")
 
-    matrix = build_matrix(dates, args.days, args.pct)
+    universe_tickers: list[str] | None = None
+    if args.universe == "live":
+        from agents.universe_manager import UniverseManager
+        universe_tickers = [t for t, _ in UniverseManager().get_universe()]
+        print(f"운영 유니버스 {len(universe_tickers)}종목으로 한정")
+
+    matrix = build_matrix(dates, args.days, args.pct, tickers=universe_tickers)
     if matrix.empty:
         print("분석 가능한 데이터 없음")
         return
