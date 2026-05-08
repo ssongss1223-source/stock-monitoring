@@ -28,6 +28,25 @@
 - 변경 사항: 문제를 재현했고, 인증 초기화 흐름을 추적함
 - 관련 파일: `src/auth/useAuth.ts`, `src/app/router.tsx`
 - 메모: 사용자 상태가 안정되기 전에 redirect가 먼저 발생함
+
+---
+
+## 2026-05-08 (세션 19)
+- 작업: 데이터 수집 현황 분석 + 중장기 전략 수립 + store.py 수정
+- 변경 사항:
+  - `data/store.py`: foreign_net / inst_net / short_balance 수집 로직 추가 (KRX 인증 필요)
+  - `.claude/plans/단계별 발전 전략 260508.md`: Phase 1~3 ML 로드맵 문서 생성
+- 관련 파일: `data/store.py`, `data/stock.duckdb`
+- 메모:
+  - DB 실제 상태: ohlcv_daily 2.5년(359종목), ohlcv_min 3개월(356종목), 나머지 3개 테이블 0건
+  - foreign_net/inst_net/short_balance: 스키마 있고 코드도 추가했으나 KRX_ID/KRX_PW 없으면 수집 안 됨
+  - pykrx `get_market_trading_value_by_date`, `get_shorting_balance_by_date` → KRX 인증 필요
+  - 키움 연동: Windows 전용(COM), GCP Linux 불가. GCP Windows VM e2-small 월 ~$11(스케줄 가동 기준)
+  - 60분봉은 매일 수집이 곧 자산 — 과거로 돌아갈 방법 없음. KRX 데이터시스템에서 유료 구매 검토 가능
+- 다음 아이디어:
+  - backtest_labels 생성 → XGBoost walk-forward 파이프라인 (Phase 1)
+  - signal_history 저장 활성화 → 실제 신호 성과 추적
+  - KRX 계정 등록 → foreign_net/inst_net/short_balance 수집 재개
 - 다음 아이디어: 초기화 순서를 조정한 뒤 로그인 흐름 재검증
 
 ---
@@ -88,6 +107,20 @@
   - 5일 5%: 승률 31.6%, 손절 생존 후 37.0%, 평균 수익 +0.76%
 - 메모: 손절 생존 필터(max_drawdown >= -5%)가 승률 차이를 크게 만듦. 리스크 관리가 핵심.
 - 다음 아이디어: feature별 lift 분석으로 volume 중복 문제 정량화
+
+## 2026-05-07 세션 18b — 옵션 A 실행 결과 확인 + GCP push
+
+- 작업: `--universe live` 실행, 결과 분석, git push
+- 변경 사항: `docs/checkpoint.md`, `docs/work-log.md` 갱신
+- 결과 요약:
+  - 기준선 승률 61.0% (운영 101종목) vs 53.6% (전체 350종목)
+  - `has_pattern` 운영 유니버스에서 3위 (lift 1.108) — 전체 기준보다 큰 폭 상승
+  - `ichimoku_cloud_support` 세션 16에서 하향했으나 운영서 lift 1.064로 유의미
+  - `volume_surge` / `ichimoku_cloud_break` lift < 1 → 대형주에서 역효과
+- 관련 파일: `backtest/validator.py`, `config/scoring/v1_baseline/technical.yaml`
+- 메모:
+  - git push 완료 (843b29c), VM deploy는 SSH 접속 후 수동 실행 필요
+- 다음 아이디어: `technical.yaml` 가중치 재조정 후 validator 재실행으로 개선폭 검증
 
 ## 2026-05-07 세션 18 — 옵션 A 구현 + 텔레그램 S등급 필터
 

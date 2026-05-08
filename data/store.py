@@ -163,6 +163,19 @@ class OhlcvStore:
                 new_df = None
 
             if new_df is not None and not new_df.empty:
+                try:
+                    inv = stock.get_market_trading_value_by_date(start_str, today_str, ticker)
+                    if inv is not None and not inv.empty:
+                        new_df["foreign_net"] = inv.get("외국인합계", None)
+                        new_df["inst_net"] = inv.get("기관합계", None)
+                except Exception as e:
+                    logger.warning("%s 투자자별 순매수 조회 실패: %s", ticker, e)
+                try:
+                    sh = stock.get_shorting_balance_by_date(start_str, today_str, ticker)
+                    if sh is not None and not sh.empty:
+                        new_df["short_balance"] = sh.get("잔고수량", None)
+                except Exception as e:
+                    logger.warning("%s 공매도잔고 조회 실패: %s", ticker, e)
                 _upsert_daily(conn, _prep_daily(new_df, ticker))
 
             result = _read_daily(conn, ticker)

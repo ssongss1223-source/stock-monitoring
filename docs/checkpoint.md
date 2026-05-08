@@ -1,52 +1,59 @@
 # Checkpoint
 
 ## Current Goal
-- 운영 유니버스(100~105종목) 한정 lift 재분석 → 가중치 재조정 (옵션 A 실행 단계)
+- Phase 1 ML 파이프라인 착수: `backtest_labels` 생성 + `signal_history` 저장 활성화
 
 ## Current Status
-- 세션 18: 옵션 A 구현 완료, 텔레그램 S등급 필터 추가 완료 — GCP 반영 필요
-- 기준선 승률: 53.6% (12날짜 × 350종목, 4,212건) — 전체 종목 기준
+- 세션 19 완료: 데이터 수집 현황 분석 + 중장기 전략 수립 + store.py 수정
+- 기존 rule-based 기준선 승률: 61.0% (운영 101종목)
+- VM deploy (세션 18 push분)는 아직 수동 실행 필요
 
 ## Done
-- **옵션 A 구현** (세션 18):
-  - `backtest/validator.py`: `--universe live` 추가, `_load_all_ohlcv(tickers=None)` ticker 필터 지원
-  - `backtest/optimizer.py`: `--universe live` 추가
-- **텔레그램 S등급 필터** (세션 18):
-  - `agents/orchestrator.py`: `buy_signals` → S등급만 `report_agent.send()` 전달 (A/B등급 로그에는 남음)
-- **Scoring 가중치 조정** (세션 16): `near_52w_high_5pct` +1→+3, `ichimoku_cloud_support` +3→+1
-- **`buy_grade.yaml` 조정** (세션 16): S등급 `pattern_required: true → false`
+- **데이터 현황 전수 파악** (세션 19):
+  - `ohlcv_daily`: 359종목, 2023-11-17~2026-05-07 (2.5년) ✅
+  - `ohlcv_min`: 356종목, 2026-02-03~2026-05-07 (3개월) ✅
+  - `signal_history`, `backtest_labels`, `ticker_master`: 전부 0건 ⚠️
+  - `foreign_net`, `inst_net`, `short_balance`: 전부 NULL ⚠️
+- **`store.py` 수정** (세션 19): foreign_net / inst_net / short_balance 수집 로직 추가
+  - 단, KRX 인증(KRX_ID/KRX_PW) 없으면 실제 수집 안 됨 → KRX 계정 등록 필요
+- **단계별 발전 전략 문서** (세션 19): `.claude/plans/단계별 발전 전략 260508.md` 저장
+- **세션 18 기완료**: validator/optimizer `--universe live`, 텔레그램 S등급 필터, GCP push
 
 ## Remaining
-- **[즉시] GCP 반영**: `git push` → VM `sudo bash /opt/stock-monitor/deploy/update.sh`
-- **[즉시] 옵션 A 실행 & 결과 확인**:
-  ```
-  python -m backtest.validator --days 3 --pct 0.03 --n-dates 12 --universe live
-  python -m backtest.optimizer --days 3 --pct 0.03 --n-dates 12 --universe live
-  ```
-- **[다음] 옵션 A 결과 반영**: 운영 유니버스 기준 lift로 가중치 재조정
-- **[이후] 옵션 B**: 종목별 개별 파라미터 (grade 임계값 + 지표 window), YAML/ScoringEngine 수정 필요
-- **[이후] `backtest/feature_matrix.py`**: signal_history 소급 적재용 과거 feature 재계산
-- **[이후] Secret Manager 연동**: 현재 .env 직접 기입
-- **[중장기] pykrx 공매도 잔량**, **Kiwoom OpenAPI+ 연동**
+- **[즉시] VM deploy**: `sudo bash /opt/stock-monitor/deploy/update.sh`
+- **[즉시] KRX 계정 등록**: data.krx.co.kr → KRX_ID/KRX_PW 발급 → GCP .env 등록
+- **[다음] Phase 1 ML 착수**:
+  1. `backtest/labeler.py` 실행 → `backtest_labels` 데이터 생성
+  2. `orchestrator.py`에서 `signal_history` 저장 활성화
+  3. 일봉 피처 엔지니어링 스크립트 작성 (OBV slope, 회전율, 이평 배열 등)
+  4. XGBoost Walk-forward 파이프라인 구성
+- **[보류] `technical.yaml` 가중치 재조정**: lift 결과 반영 (ichimoku_cloud_break 제거 등)
+  - ichimoku_cloud_break: lift 0.794 → 제거 또는 마이너스
+  - volume_surge: lift 0.944 → 하향
+  - has_pattern: 운영 3위 → 상향
+  - ichimoku_cloud_support: 운영 유효, 세션16 하향 재검토
 
 ## Risks / Blockers
-- GCP e2-micro 1GB RAM: 파이프라인 병렬 실행 시 메모리 주의
-- 운영 100~105종목 중 DuckDB에 60일 이상 이력 없는 종목은 옵션 A에서 자동 제외
-- 샘플 기간(2026-01-29 ~ 2026-04-16)이 대체로 상승장 → 하락장 일반화 미검증
-- ReportAgent "15723번 발송 시도" 원인 미확인
+- KRX 인증 없으면 foreign_net/inst_net/short_balance 수집 불가
+- 60분봉 3개월치로는 ML 학습에 부족 → 계속 누적 중, 1년 후 의미 있어짐
+- `backtest_labels` 0건 → ML 시작 전 labeler 실행 필수
+- GCP e2-micro 1GB RAM: 병렬 실행 시 메모리 주의
+- 키움 연동은 Windows 전용 → GCP Linux VM 불가, 개인 PC 상시 가동 어려움
 
 ## Next Actions
-1. `git push` → GCP VM `sudo bash /opt/stock-monitor/deploy/update.sh`
-2. `python -m backtest.validator --days 3 --pct 0.03 --n-dates 12 --universe live` 실행
-3. lift 결과 비교 (전체 vs 운영 유니버스) → 필요 시 `technical.yaml` 재조정
+1. VM: `sudo bash /opt/stock-monitor/deploy/update.sh`
+2. KRX 계정 등록 후 GCP .env에 KRX_ID/KRX_PW 추가
+3. `python -m backtest.labeler` 실행 → backtest_labels 생성
+4. `orchestrator.py` signal_history 저장 로직 활성화
 
 ## References
 - **운영 VM**: `instance-20260505-092414` (us-central1-a), 앱 경로: `/opt/stock-monitor`
 - **DuckDB**: `data/stock.duckdb`
-- **Validator**: `backtest/validator.py`
-- **Optimizer**: `backtest/optimizer.py`
+- **store.py 수정**: `data/store.py` (foreign_net/inst_net/short_balance 수집 추가)
+- **단계별 전략**: `.claude/plans/단계별 발전 전략 260508.md`
 - **Scoring 설정**: `config/scoring/v1_baseline/technical.yaml`, `buy_grade.yaml`
-- **DB 스키마**: `data/db.py`
+- **Labeler**: `backtest/labeler.py`
+- **Validator**: `backtest/validator.py`
 
 ## Last Updated
-- 2026-05-07 세션 18
+- 2026-05-08 세션 19 (데이터 설계 검토 + 중장기 전략 수립)
