@@ -31,6 +31,16 @@
 
 ---
 
+## 2026-05-09 (세션 20)
+- 작업: store.py 커밋 + VM deploy
+- 변경 사항:
+  - `data/store.py` + docs 커밋/push (commit `9215818`)
+  - `instance-20260505-092414` deploy 완료 — 세션 18·19 변경사항 반영, 서비스 재시작
+- 관련 파일: `data/store.py`, `deploy/update.sh`
+- 메모: deploy 후 `stock-monitor.service` active (running) 확인
+
+---
+
 ## 2026-05-08 (세션 19)
 - 작업: 데이터 수집 현황 분석 + 중장기 전략 수립 + store.py 수정
 - 변경 사항:
