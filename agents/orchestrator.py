@@ -1,5 +1,7 @@
 import asyncio
+import json
 import logging
+from datetime import date
 
 from pykrx import stock
 
@@ -13,7 +15,8 @@ from agents.technical_analysis import TechnicalAnalysisAgent
 from agents.universe_manager import UniverseManager
 from agents.volume_analysis import VolumeAnalysisAgent
 from core.scoring_engine import ScoringEngine
-from data.store import HourlyStore, OhlcvStore
+from data.db import get_conn
+from data.store import HourlyStore, MarketIndexStore, OhlcvStore
 from models.signals import BuySignal, MarketContext, PatternLearningResult
 
 logger = logging.getLogger(__name__)
@@ -38,6 +41,30 @@ class Orchestrator:
         self.sell_agent = SellSignalAgent(self.engine)
         self.buy_agent = BuySignalAgent(self.engine)
         self.report_agent = ReportAgent()
+
+    async def run_collect(self) -> None:
+        """장 마감 후 데이터 수집 (16:00 KST = 07:00 UTC)."""
+        logger.info("=== 데이터 수집 시작 ===")
+        try:
+            universe = UniverseManager().get_universe()
+            semaphore = asyncio.Semaphore(_CONCURRENCY)
+            loop = asyncio.get_running_loop()
+
+            async def _collect_one(ticker: str, market: str) -> None:
+                async with semaphore:
+                    await loop.run_in_executor(None, OhlcvStore.fetch_and_update_daily, ticker)
+                    try:
+                        await loop.run_in_executor(
+                            None, HourlyStore.fetch_and_update_hourly, ticker, market
+                        )
+                    except Exception:
+                        pass
+
+            await asyncio.gather(*[_collect_one(t, m) for t, m in universe])
+            await loop.run_in_executor(None, MarketIndexStore.fetch_and_update)
+        except Exception:
+            logger.exception("데이터 수집 오류")
+        logger.info("=== 데이터 수집 완료 ===")
 
     async def run_daily(self) -> None:
         logger.info("=== 일일 분석 시작 ===")
@@ -88,7 +115,11 @@ class Orchestrator:
             logger.warning("종목 분석 중 예외 %d건 발생 (개별 종목 건너뜀)", len(errs))
         logger.info("매수 신호: %d종목 (전체 %d종목 분석)", len(buy_signals), len(universe))
 
-        # ── 4. 매도신호 수집 + 발송 ───────────────────────────────────────────
+        # ── 4. signal_history 저장 ────────────────────────────────────────────
+        if buy_signals:
+            _save_signal_history(buy_signals)
+
+        # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
         s_grade_signals = [s for s in buy_signals if s.grade == "S"]
         logger.info("텔레그램 발송: S등급 %d종목 (전체 매수신호 %d종목)", len(s_grade_signals), len(buy_signals))
@@ -147,6 +178,33 @@ class Orchestrator:
                 pattern_result=pattern_result,
             )
             return ticker, name, buy_signal, pattern_result
+
+
+def _save_signal_history(signals: list[BuySignal]) -> None:
+    today = date.today()
+    conn = get_conn()
+    try:
+        for s in signals:
+            features = json.dumps({
+                "total_score": s.total_score,
+                "trend_score": s.trend_score,
+                "pattern": s.pattern,
+                "pattern_score": s.pattern_score,
+                "stop_loss": s.stop_loss,
+                "target_price": s.target_price,
+                "risk_reward": s.risk_reward,
+            })
+            conn.execute(
+                """INSERT OR REPLACE INTO signal_history
+                   (signal_date, ticker, vol_score, grade, features, entry_price)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                [today, s.ticker, s.volume_score, s.grade, features, s.current_price],
+            )
+        logger.info("signal_history 저장: %d건", len(signals))
+    except Exception:
+        logger.exception("signal_history 저장 실패")
+    finally:
+        conn.close()
 
 
 def _get_name(ticker: str) -> str:

@@ -42,6 +42,13 @@ async def main() -> None:
 
     scheduler = AsyncIOScheduler(timezone="UTC")
     scheduler.add_job(
+        orchestrator.run_collect,
+        trigger="cron",
+        hour=config.COLLECT_HOUR_UTC,
+        minute=config.COLLECT_MINUTE_UTC,
+        id="daily_collect",
+    )
+    scheduler.add_job(
         orchestrator.run_daily,
         trigger="cron",
         hour=config.SCHEDULE_HOUR_UTC,
@@ -50,7 +57,9 @@ async def main() -> None:
     )
     scheduler.start()
     logger.info(
-        "스케줄러 시작: 매일 %02d:%02d UTC (= %02d:%02d KST)",
+        "스케줄러 시작: 수집 %02d:%02d UTC (= %02d:%02d KST) / 분석 %02d:%02d UTC (= %02d:%02d KST)",
+        config.COLLECT_HOUR_UTC, config.COLLECT_MINUTE_UTC,
+        (config.COLLECT_HOUR_UTC + 9) % 24, config.COLLECT_MINUTE_UTC,
         config.SCHEDULE_HOUR_UTC, config.SCHEDULE_MINUTE_UTC,
         (config.SCHEDULE_HOUR_UTC + 9) % 24, config.SCHEDULE_MINUTE_UTC,
     )

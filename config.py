@@ -32,6 +32,8 @@ OHLCV_HOURLY_DIR: str = "data/ohlcv/hourly_60m"
 # 거래량 프로파일 캐시 (종목별 시간대별 P90/P95/P99, 당일 1회 갱신)
 VOLUME_PROFILE_CACHE: str = "data/volume_profile_cache.json"
 
-# 실행 스케줄 (UTC 기준 — 23:00 UTC = 08:00 KST 다음날)
-SCHEDULE_HOUR_UTC: int = 23
+# 실행 스케줄 (UTC 기준)
+COLLECT_HOUR_UTC: int = 7   # 데이터 수집 — 16:00 KST (장 마감 후)
+COLLECT_MINUTE_UTC: int = 0
+SCHEDULE_HOUR_UTC: int = 23  # 신호 분석 — 08:00 KST (장 시작 전)
 SCHEDULE_MINUTE_UTC: int = 0
