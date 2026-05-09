@@ -35,6 +35,8 @@ class UniverseManager:
             result = _top_by_mktcap(today, 50)
         elif self.mode == "top100_mktcap":
             result = _top_by_mktcap(today, 100)
+        elif self.mode == "top200_mktcap":
+            result = _top_by_mktcap(today, 200)
         elif self.mode == "sector_top5":
             result = _sector_top5(today)
         else:
