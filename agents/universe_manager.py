@@ -37,6 +37,8 @@ class UniverseManager:
             result = _top_by_mktcap(today, 100)
         elif self.mode == "top200_mktcap":
             result = _top_by_mktcap(today, 200)
+        elif self.mode == "kospi200_daq150":
+            result = _kospi200_daq150(today)
         elif self.mode == "sector_top5":
             result = _sector_top5(today)
         else:
@@ -76,6 +78,22 @@ def _top_by_mktcap(today: str, n: int) -> list[tuple[str, str]]:
         return []
     records.sort(key=lambda x: x["cap"], reverse=True)
     return [(r["ticker"], r["market"]) for r in records[:n]]
+
+
+def _kospi200_daq150(today: str) -> list[tuple[str, str]]:
+    """KOSPI200 + KOSDAQ150 구성종목."""
+    result: list[tuple[str, str]] = []
+    for index_code, market in (("1028", "KOSPI"), ("2203", "KOSDAQ")):
+        try:
+            tickers = stock.get_index_portfolio_deposit_file(index_code)
+            if tickers:
+                result.extend((t, market) for t in tickers)
+        except Exception as e:
+            logger.warning("%s(%s) 구성종목 조회 실패: %s", market, index_code, e)
+    if not result:
+        logger.warning("kospi200_daq150 조회 실패 → top200_mktcap으로 대체")
+        result = _top_by_mktcap(today, 200)
+    return result
 
 
 def _sector_top5(today: str) -> list[tuple[str, str]]:

@@ -13,6 +13,7 @@ UNIVERSE_MODE: str = os.getenv("UNIVERSE_MODE", "top100_mktcap")
 # "top50_mktcap"   — 시총 상위 50개 자동 조회
 # "top100_mktcap"  — 시총 상위 100개 자동 조회
 # "top200_mktcap"  — 시총 상위 200개 자동 조회
+# "kospi200_daq150" — KOSPI200 + KOSDAQ150 구성종목 (~350개)
 # "sector_top5"    — 섹터별 시총 상위 5개 (~50~60 종목)
 INCLUDE_WATCHLIST: bool = True  # True면 모드 무관하게 watchlist 항상 포함
 
