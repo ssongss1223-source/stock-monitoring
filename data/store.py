@@ -23,8 +23,15 @@ _REQUIRED = ["open", "high", "low", "close", "volume"]
 _DAILY_COLS = [
     "ticker", "date", "open", "high", "low", "close", "volume", "amount",
     "market_cap", "shares", "foreign_net", "inst_net", "short_balance",
+    "per", "pbr", "eps", "bps", "div_yield", "foreign_exh_rate",
+    "short_volume", "short_ratio",
 ]
 _MIN_COLS = ["ticker", "dt", "open", "high", "low", "close", "volume", "amount", "source"]
+_INDEX_COLS = ["ticker", "date", "open", "high", "low", "close", "volume", "amount", "market_cap"]
+_INDEX_RENAME = {
+    "시가": "open", "고가": "high", "저가": "low", "종가": "close",
+    "거래량": "volume", "거래대금": "amount", "상장시가총액": "market_cap",
+}
 
 
 # ── 정규화 ────────────────────────────────────────────────────────────────────
@@ -95,6 +102,16 @@ def _upsert_min(conn, df: pd.DataFrame) -> None:
     conn.execute(f"""
         INSERT OR REPLACE INTO ohlcv_min
         SELECT {', '.join(_MIN_COLS)} FROM _m
+    """)
+
+
+def _upsert_index(conn, df: pd.DataFrame) -> None:
+    if df.empty:
+        return
+    conn.register("_i", df)
+    conn.execute(f"""
+        INSERT OR REPLACE INTO market_index
+        SELECT {', '.join(_INDEX_COLS)} FROM _i
     """)
 
 
@@ -176,6 +193,31 @@ class OhlcvStore:
                         new_df["short_balance"] = sh.get("잔고수량", None)
                 except Exception as e:
                     logger.warning("%s 공매도잔고 조회 실패: %s", ticker, e)
+                try:
+                    fund = stock.get_market_fundamental(start_str, today_str, ticker)
+                    if fund is not None and not fund.empty:
+                        new_df["per"] = fund.get("PER", None)
+                        new_df["pbr"] = fund.get("PBR", None)
+                        new_df["eps"] = fund.get("EPS", None)
+                        new_df["bps"] = fund.get("BPS", None)
+                        new_df["div_yield"] = fund.get("DIV", None)
+                except Exception as e:
+                    logger.warning("%s 펀더멘탈 조회 실패: %s", ticker, e)
+                try:
+                    exh = stock.get_exhaustion_rates_of_foreign_investment_by_date(
+                        start_str, today_str, ticker
+                    )
+                    if exh is not None and not exh.empty:
+                        new_df["foreign_exh_rate"] = exh.get("한도소진률", None)
+                except Exception as e:
+                    logger.warning("%s 외국인한도소진률 조회 실패: %s", ticker, e)
+                try:
+                    sv = stock.get_shorting_volume_by_date(start_str, today_str, ticker)
+                    if sv is not None and not sv.empty:
+                        new_df["short_volume"] = sv.get("공매도", None)
+                        new_df["short_ratio"] = sv.get("비중", None)
+                except Exception as e:
+                    logger.warning("%s 공매도거래량 조회 실패: %s", ticker, e)
                 _upsert_daily(conn, _prep_daily(new_df, ticker))
 
             result = _read_daily(conn, ticker)
@@ -286,6 +328,52 @@ def _normalize_yf(df: pd.DataFrame) -> pd.DataFrame:
             .tz_localize(None)
         )
     return df
+
+
+# ── MarketIndexStore ─────────────────────────────────────────────────────────
+
+_INDEX_TICKERS = {"1001": "KOSPI", "2001": "KOSDAQ"}
+
+
+class MarketIndexStore:
+    """KOSPI/KOSDAQ 지수 일봉 영속화 (DuckDB)."""
+
+    @staticmethod
+    def fetch_and_update() -> None:
+        conn = get_conn()
+        try:
+            for code in _INDEX_TICKERS:
+                row = conn.execute(
+                    "SELECT MAX(date) FROM market_index WHERE ticker = ?", [code]
+                ).fetchone()
+                last_date = row[0] if row and row[0] is not None else None
+
+                if last_date is not None:
+                    start_date = datetime.combine(last_date, datetime.min.time()) + timedelta(days=1)
+                else:
+                    start_date = datetime.now() - timedelta(days=900)
+
+                start_str = start_date.strftime("%Y%m%d")
+                today_str = datetime.now().strftime("%Y%m%d")
+
+                try:
+                    df = stock.get_index_ohlcv_by_date(start_str, today_str, code)
+                    if df is None or df.empty:
+                        continue
+                    df = df.rename(columns=_INDEX_RENAME)
+                    df["ticker"] = code
+                    df.index.name = "date"
+                    df = df.reset_index()
+                    df["date"] = pd.to_datetime(df["date"]).dt.date
+                    for c in _INDEX_COLS:
+                        if c not in df.columns:
+                            df[c] = None
+                    _upsert_index(conn, df[_INDEX_COLS])
+                    logger.debug("%s(%s) 지수 %s~%s 저장", _INDEX_TICKERS[code], code, start_str, today_str)
+                except Exception as e:
+                    logger.warning("지수 %s 조회 실패: %s", code, e)
+        finally:
+            conn.close()
 
 
 # ── 마이그레이션 ──────────────────────────────────────────────────────────────
