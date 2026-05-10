@@ -74,18 +74,19 @@ CREATE TABLE IF NOT EXISTS signal_history (
 );
 
 CREATE TABLE IF NOT EXISTS backtest_labels (
-    signal_date   DATE,
-    ticker        VARCHAR,
-    hold_days     INT,
-    target_return DOUBLE,
-    entry_price   DOUBLE,
-    max_high      DOUBLE,
-    min_low       DOUBLE,
-    close_n       DOUBLE,
-    label         TINYINT,
-    max_drawdown  DOUBLE,
-    return_n      DOUBLE,
-    PRIMARY KEY (signal_date, ticker, hold_days, target_return)
+    signal_date      DATE,
+    ticker           VARCHAR,
+    entry_price      DOUBLE,
+    max_high_3d      DOUBLE,
+    max_high_5d      DOUBLE,
+    max_high_10d     DOUBLE,
+    max_drawdown_3d  DOUBLE,
+    max_drawdown_5d  DOUBLE,
+    max_drawdown_10d DOUBLE,
+    return_3d        DOUBLE,
+    return_5d        DOUBLE,
+    return_10d       DOUBLE,
+    PRIMARY KEY (signal_date, ticker)
 );
 """
 
@@ -109,6 +110,12 @@ ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_ratio     DOUBLE;
 
 def init_db() -> None:
     with get_conn() as conn:
+        # old long-format backtest_labels (hold_days 컬럼 존재) → DROP 후 재생성
+        cols = conn.execute(
+            "SELECT column_name FROM information_schema.columns WHERE table_name='backtest_labels'"
+        ).fetchall()
+        if any(c[0] == 'hold_days' for c in cols):
+            conn.execute("DROP TABLE backtest_labels")
         conn.execute(_DDL)
         conn.execute(_MIGRATIONS)
 

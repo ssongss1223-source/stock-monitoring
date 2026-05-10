@@ -1,23 +1,21 @@
 """
-백테스트 라벨러 — (ticker, signal_date) → 선도 수익 라벨 계산.
+백테스트 라벨러 — (ticker, signal_date) → 선도 수익 wide-format 라벨 계산.
 
-기본값: 3일 보유, 3% 수익 목표. 두 파라미터 모두 호출 시 변경 가능.
+보유 기간 3/5/10일 × 목표 수익률 3/5/10%의 9가지 조합을 단일 패스로 계산.
+라벨(label_Xd_Ypct)은 feature_engineering.py에서 동적으로 파생.
 
 라벨 정의:
-  entry_price  = T+1 시가
-  max_high     = T+1 ~ T+hold_days 최고가
-  min_low      = T+1 ~ T+hold_days 최저가
-  close_n      = T+hold_days 종가
-  label        = 1 if max_high >= entry_price * (1 + target_return)
-  max_drawdown = (min_low - entry_price) / entry_price
-  return_n     = (close_n - entry_price) / entry_price
+  entry_price      = T+1 시가
+  max_high_Xd      = T+1 ~ T+X 최고가
+  max_drawdown_Xd  = (T+1~X 최저가 - entry_price) / entry_price
+  return_Xd        = (T+X 종가 - entry_price) / entry_price
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
-from datetime import date, datetime
+from datetime import date
 
 import pandas as pd
 
@@ -25,74 +23,66 @@ from data.db import get_conn
 
 logger = logging.getLogger(__name__)
 
+_HOLD_DAYS = [3, 5, 10]
+
 _LABEL_COLS = [
-    "signal_date", "ticker", "hold_days", "target_return",
-    "entry_price", "max_high", "min_low", "close_n",
-    "label", "max_drawdown", "return_n",
+    "signal_date", "ticker", "entry_price",
+    "max_high_3d", "max_high_5d", "max_high_10d",
+    "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
+    "return_3d", "return_5d", "return_10d",
 ]
 
 
-def label_one(
-    df_daily: pd.DataFrame,
-    signal_date: str | date,
-    hold_days: int = 3,
-    target_return: float = 0.03,
-) -> dict | None:
+def label_one(df_daily: pd.DataFrame, signal_date: str | date) -> dict | None:
     """
-    단일 (ticker, signal_date) 라벨 계산.
+    단일 (ticker, signal_date) wide-format 라벨 계산.
 
     Args:
-        df_daily: OhlcvStore가 반환한 DataFrame (DatetimeIndex, Open/High/Low/Close 컬럼)
+        df_daily: DatetimeIndex DataFrame (Open/High/Low/Close 컬럼)
         signal_date: 신호 발생일 (T). T+1 시가를 진입가로 사용.
-        hold_days: 보유 기간 (기본 3거래일)
-        target_return: 목표 수익률 (기본 0.03 = 3%)
 
     Returns:
-        라벨 dict, 또는 데이터 부족 시 None
+        wide-format dict, 또는 미래 데이터 부족(< 10거래일) 시 None
     """
     sd = pd.Timestamp(signal_date)
     future = df_daily[df_daily.index > sd]
 
-    if len(future) < hold_days:
+    if len(future) < max(_HOLD_DAYS):
         return None
 
-    window = future.iloc[:hold_days]
+    window = future.iloc[:max(_HOLD_DAYS)]  # T+1 ~ T+10 슬라이스 1회
     entry_price = float(window["Open"].iloc[0])
 
     if entry_price <= 0:
         return None
 
-    max_high = float(window["High"].max())
-    min_low = float(window["Low"].min())
-    close_n = float(window["Close"].iloc[-1])
+    result: dict = {"entry_price": entry_price}
+    for d in _HOLD_DAYS:
+        w = window.iloc[:d]
+        max_high = float(w["High"].max())
+        min_low = float(w["Low"].min())
+        close_n = float(w["Close"].iloc[-1])
+        result[f"max_high_{d}d"] = max_high
+        result[f"max_drawdown_{d}d"] = (min_low - entry_price) / entry_price
+        result[f"return_{d}d"] = (close_n - entry_price) / entry_price
 
-    return {
-        "entry_price": entry_price,
-        "max_high": max_high,
-        "min_low": min_low,
-        "close_n": close_n,
-        "label": int(max_high >= entry_price * (1 + target_return)),
-        "max_drawdown": (min_low - entry_price) / entry_price,
-        "return_n": (close_n - entry_price) / entry_price,
-    }
+    return result
 
 
-def label_batch(
-    pairs: list[tuple[str, str | date]],
-    hold_days: int = 3,
-    target_return: float = 0.03,
-) -> pd.DataFrame:
+def label_batch(pairs: list[tuple[str, str | date]]) -> pd.DataFrame:
     """
-    (ticker, signal_date) 리스트 → 라벨 DataFrame.
+    (ticker, signal_date) 리스트 → wide-format 라벨 DataFrame.
 
-    DuckDB에서 일봉을 읽어 각 (ticker, date) 라벨을 계산.
-    계산 불가 행(데이터 부족)은 결과에서 제외됨.
+    DuckDB에서 일봉을 읽어 각 (ticker, date)의 3/5/10일 라벨을 단일 패스로 계산.
+    미래 데이터가 10거래일 미만인 행은 제외됨.
 
     Returns:
-        columns: signal_date, ticker, hold_days, target_return,
-                 entry_price, max_high, min_low, close_n,
-                 label, max_drawdown, return_n
+        columns: signal_date, ticker, entry_price,
+                 max_high_3d/5d/10d, max_drawdown_3d/5d/10d, return_3d/5d/10d
     """
+    if not pairs:
+        return pd.DataFrame(columns=_LABEL_COLS)
+
     conn = get_conn(read_only=True)
     try:
         tickers = list({t for t, _ in pairs})
@@ -112,13 +102,11 @@ def label_batch(
         df = df_all[df_all["ticker"] == ticker].set_index("date")
         df = df.rename(columns={"open": "Open", "high": "High",
                                  "low": "Low", "close": "Close"})
-        result = label_one(df, signal_date, hold_days, target_return)
+        result = label_one(df, signal_date)
         if result is not None:
             rows.append({
                 "signal_date": pd.Timestamp(signal_date).date(),
                 "ticker": ticker,
-                "hold_days": hold_days,
-                "target_return": target_return,
                 **result,
             })
 
@@ -141,33 +129,34 @@ def save_labels(labels: pd.DataFrame) -> None:
 
 
 def summarize(labels: pd.DataFrame) -> None:
-    """라벨 결과 요약 출력."""
+    """wide-format 라벨 결과 요약 출력."""
     if labels.empty:
         print("라벨 없음")
         return
 
     n = len(labels)
-    win_rate = labels["label"].mean()
-    avg_return = labels["return_n"].mean()
-    avg_dd = labels["max_drawdown"].mean()
-    survivable = labels[labels["max_drawdown"] >= -0.05]["label"].mean()
+    print(f"신호 {n}건\n")
+    print(f"{'':16s} {'3일':>7s} {'5일':>7s} {'10일':>7s}")
+    for pct in [3, 5, 10]:
+        rates = []
+        for d in _HOLD_DAYS:
+            achieved = (labels[f"max_high_{d}d"] >= labels["entry_price"] * (1 + pct / 100)).mean()
+            rates.append(f"{achieved:.1%}")
+        print(f"  +{pct}% 달성률:     {rates[0]:>7s} {rates[1]:>7s} {rates[2]:>7s}")
 
-    params = f"hold_days={labels['hold_days'].iloc[0]}, target_return={labels['target_return'].iloc[0]:.1%}"
-    print(f"[{params}]  신호 {n}건")
-    print(f"  승률 (label=1):        {win_rate:.1%}")
-    print(f"  손절 생존 후 승률:      {survivable:.1%}  (max_drawdown >= -5%)")
-    print(f"  평균 {labels['hold_days'].iloc[0]}일 수익:      {avg_return:.2%}")
-    print(f"  평균 최대 낙폭:        {avg_dd:.2%}")
+    print()
+    avg_rets = [f"{labels[f'return_{d}d'].mean():.2%}" for d in _HOLD_DAYS]
+    print(f"  평균 수익률:     {avg_rets[0]:>7s} {avg_rets[1]:>7s} {avg_rets[2]:>7s}")
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="백테스트 라벨 계산")
+    p = argparse.ArgumentParser(description="백테스트 라벨 계산 (wide format)")
     p.add_argument("--tickers", nargs="+", help="종목 코드 목록 (미지정 시 DB 전체 종목)")
     p.add_argument("--date", default=None, help="신호 날짜 YYYY-MM-DD (미지정 시 최근 거래일)")
-    p.add_argument("--days", type=int, default=3, help="보유 기간 (기본 3)")
-    p.add_argument("--pct", type=float, default=0.03, help="목표 수익률 (기본 0.03)")
+    p.add_argument("--all", action="store_true", dest="all_signals",
+                   help="signal_history 전체 (ticker, signal_date) 라벨 생성")
     p.add_argument("--save", action="store_true", help="결과를 DB에 저장")
     return p.parse_args()
 
@@ -187,16 +176,21 @@ def main() -> None:
 
     conn = get_conn(read_only=True)
     try:
-        signal_date = date.fromisoformat(args.date) if args.date else _latest_trade_date(conn)
-        tickers = args.tickers or _all_tickers(conn)
+        if args.all_signals:
+            rows = conn.execute(
+                "SELECT ticker, signal_date FROM signal_history ORDER BY signal_date, ticker"
+            ).fetchall()
+            pairs = [(r[0], r[1]) for r in rows]
+            print(f"signal_history에서 {len(pairs)}건 로드")
+        else:
+            signal_date = date.fromisoformat(args.date) if args.date else _latest_trade_date(conn)
+            tickers = args.tickers or _all_tickers(conn)
+            pairs = [(t, signal_date) for t in tickers]
+            print(f"신호일: {signal_date}, 종목: {len(tickers)}개")
     finally:
         conn.close()
 
-    print(f"신호일: {signal_date}, 종목: {len(tickers)}개, "
-          f"hold_days={args.days}, target_return={args.pct:.1%}")
-
-    pairs = [(t, signal_date) for t in tickers]
-    labels = label_batch(pairs, hold_days=args.days, target_return=args.pct)
+    labels = label_batch(pairs)
     summarize(labels)
 
     if args.save:

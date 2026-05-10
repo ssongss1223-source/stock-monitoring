@@ -112,10 +112,15 @@ def build_matrix(
         d_ts = pd.Timestamp(d)
 
         pairs = [(t, d) for t in tickers_actual]
-        labels_df = label_batch(pairs, hold_days, target_pct)
+        labels_df = label_batch(pairs)
         if labels_df.empty:
             logger.warning("레이블 없음: %s", d)
             continue
+        # wide format → hold_days 기준 max_high로 label 파생
+        high_col = f"max_high_{hold_days}d" if hold_days in (3, 5, 10) else "max_high_3d"
+        labels_df["label"] = (
+            labels_df[high_col] >= labels_df["entry_price"] * (1 + target_pct)
+        ).astype(int)
         label_map = dict(zip(labels_df["ticker"], labels_df["label"]))
 
         n_ok = 0

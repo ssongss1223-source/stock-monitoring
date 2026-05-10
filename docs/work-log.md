@@ -3,6 +3,46 @@
 ## 목적
 이 파일은 세션별 작업 이력과 상세 기록을 누적해서 저장한다.
 
+---
+
+## 2026-05-09 세션 21 — 데이터 수집 인프라 전면 정비
+- 작업: KRX 인증 등록, 신규 데이터 5종 추가, Universe 확장, 스케줄 분리, signal_history 활성화
+- 변경 사항:
+  - `data/db.py`: ohlcv_daily 신규 컬럼 8개(per/pbr/eps/bps/div_yield/foreign_exh_rate/short_volume/ratio), market_index 테이블 신규, ALTER TABLE 마이그레이션
+  - `data/store.py`: fetch_and_update_daily에 fundamental/exhaustion/shorting_volume 수집 추가, MarketIndexStore 클래스 신규
+  - `agents/universe_manager.py`: top200_mktcap, kospi200_daq150 모드 추가
+  - `agents/orchestrator.py`: run_collect() 신규(16:00 KST 수집 잡), signal_history 저장 활성화
+  - `main.py`: 07:00 UTC collect 잡 추가 (기존 23:00 UTC 분석 잡 유지)
+  - `config.py`: COLLECT_HOUR_UTC/MINUTE_UTC 추가
+  - `scripts/backfill_new_cols.py`: OHLCV 미적재 종목 풀 적재 + 신규 컬럼 소급 UPDATE 통합
+- 관련 파일: `data/db.py`, `data/store.py`, `agents/orchestrator.py`, `main.py`
+- 메모:
+  - VM ohlcv_daily 0건 원인: stock.duckdb가 root 소유 → chown으로 해결
+  - short_volume/ratio: VM pykrx 버전 차이로 컬럼명 오류('거래량' KeyError) → 경고 처리
+  - market_index: 1,196건(KOSPI 598 + KOSDAQ 598일) 이미 적재 완료
+  - Universe: kospi200_daq150 → 351종목(KOSPI200 + KOSDAQ150 + watchlist)
+  - backfill 실행 중 (351종목, 약 60~90분 소요), 완료 시 labeler 자동 실행(크론 16e03720)
+- 다음 아이디어: ML 피처 엔지니어링 스크립트(OBV slope, 회전율, 이평 배열), XGBoost walk-forward
+
+---
+
+## 2026-05-09 세션 22 — ML 피처 엔지니어링 구현
+- 작업: backtest_labels wide format 전환 + feature_engineering.py 신규 작성
+- 변경 사항:
+  - `data/db.py`: backtest_labels 스키마 wide format 전환 + migration 로직 추가
+  - `backtest/labeler.py`: label_one/batch wide format 재설계, --all 플래그 추가
+  - `backtest/validator.py`: label_batch() call site 수정 (max_high_{d}d로 label 파생)
+  - `scripts/feature_engineering.py`: 신규 — signal_history × ohlcv_daily × backtest_labels JOIN, 유동성 필터(volume/amount), 라벨 9개 동적 생성, parquet 출력
+- 관련 파일: `data/db.py`, `backtest/labeler.py`, `backtest/validator.py`, `scripts/feature_engineering.py`
+- 메모:
+  - 로컬 amount/market_cap 전부 NULL (backfill 미실행) → NULL-safe 유동성 필터로 대응
+  - 로컬 backfill 백그라운드 실행 중 (PID 579, UNIVERSE_MODE=kospi200_daq150)
+  - 공매도 API pykrx KeyError 'output' 경고 — 계속 진행됨 (VM과 동일 이슈)
+  - 삼성전자 mock 데이터로 전 구간 로컬 테스트 완료
+- 다음 아이디어: VM에서 labeler --all --save → feature_engineering → XGBoost walk-forward
+
+---
+
 `docs/checkpoint.md`에 남기에는 길거나 상세한 정보,
 예를 들어 디버깅 메모, 시도한 방법, 실패 원인, 세션별 진행 내용 등을 기록하는 용도로 사용한다.
 
