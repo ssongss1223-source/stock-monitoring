@@ -5,6 +5,25 @@
 
 ---
 
+## 2026-05-11 세션 28 — XGBoost 연동 배포 + 스케줄 조정
+- 작업: 9개 라벨 전체 학습, label_3d_5pct 선택, 추론 모듈 구현, VM 배포
+- 변경 사항:
+  - `scripts/train_xgboost.py`: _TARGETS 3개 → 9개 전체 학습
+  - `agents/ml_scorer.py`: 신규 — DB ohlcv 피처 + 신호 피처 조합 → xgb 추론, BuySignal.xgb_prob 인플레이스 업데이트
+  - `models/signals.py`: BuySignal에 `xgb_prob: Optional[float] = None` 추가
+  - `agents/orchestrator.py`: buy_signals 수집 후 `score_signals()` 호출 (실패 시 파이프라인 계속)
+  - `agents/report.py`: 상세 섹션에 `ML(3일+5%): XX%` 표시
+  - `config.py`: SCHEDULE_HOUR_UTC 23 → 22 (분석 08:00 → 07:00 KST)
+- 관련 파일: `agents/ml_scorer.py`, `models/signals.py`, `agents/orchestrator.py`, `agents/report.py`, `config.py`
+- 메모:
+  - 9개 라벨 AUC: 3d_10pct 0.6627 > 5d_10pct 0.6342 > 3d_5pct 0.6168 (채택)
+  - positive율 낮을수록 AUC 높음 — 단, 3d_10pct(14.7%)는 실용성 부족으로 기각
+  - VM 배포 시 git 권한 이슈(stock/KHSong 유저 혼재) → `sudo chown -R stock:stock` + `git reset --hard`로 해결
+  - xgboost VM에 신규 설치 필요 (v3.2.0)
+- 다음 아이디어: 신호 사후 검증(/verify 명령), 종목 그룹별 모델, 장세 레이어 강화
+
+---
+
 ## 2026-05-11 세션 27 — vol_score 재설계 + backfill 730일 + 모델 재학습
 - 작업: backfill vol_score 분포 불일치 해소, 데이터 확장, XGBoost 재학습
 - 변경 사항:
