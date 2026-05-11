@@ -77,7 +77,7 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     try:
         # 1. signal_history
         df_sig = conn.execute(
-            "SELECT signal_date, ticker, vol_score, grade, features FROM signal_history"
+            "SELECT signal_date, ticker, vol_score, grade, features, scoring_version FROM signal_history"
         ).df()
 
         # 2. ohlcv_daily: signal_date 기준 스냅샷 + rolling 5일 합산
@@ -98,7 +98,28 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
             FROM ohlcv_daily
         """).df()
 
-        # 3. backtest_labels
+        # 3. ticker 특성 피처 (종목별 특성 인코딩)
+        df_ticker = conn.execute("""
+            WITH ret AS (
+                SELECT ticker, date, volume, foreign_exh_rate,
+                       close / NULLIF(LAG(close, 1) OVER (PARTITION BY ticker ORDER BY date), 0) - 1
+                           AS daily_ret
+                FROM ohlcv_daily
+            )
+            SELECT ticker, date,
+                   LN(NULLIF(AVG(volume) OVER w, 0))          AS log_avg_volume_20d,
+                   STDDEV_POP(daily_ret) OVER w * SQRT(252)    AS hist_volatility_20d,
+                   AVG(foreign_exh_rate) OVER w                AS avg_foreign_exh_rate_20d
+            FROM ret
+            WINDOW w AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING)
+        """).df()
+
+        # 4. 업종 (ticker_master.sector) — 데이터 없으면 빈 DataFrame
+        df_sector = conn.execute(
+            "SELECT ticker, sector FROM ticker_master WHERE sector IS NOT NULL"
+        ).df()
+
+        # 5. backtest_labels
         df_lbl = conn.execute("SELECT * FROM backtest_labels").df()
     finally:
         conn.close()
@@ -120,6 +141,9 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     df_roll["date"] = pd.to_datetime(df_roll["date"])
     df_lbl["signal_date"] = pd.to_datetime(df_lbl["signal_date"])
 
+    # --- ticker 특성 피처 날짜 타입 통일 ---
+    df_ticker["date"] = pd.to_datetime(df_ticker["date"])
+
     # --- signal_history × ohlcv_daily JOIN ---
     df = df_sig.merge(
         df_roll,
@@ -127,6 +151,18 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
         right_on=["ticker", "date"],
         how="inner",
     ).drop(columns=["date"])
+
+    # --- ticker 특성 피처 JOIN ---
+    df = df.merge(
+        df_ticker,
+        left_on=["ticker", "signal_date"],
+        right_on=["ticker", "date"],
+        how="left",
+    ).drop(columns=["date"])
+
+    # --- 업종 JOIN (데이터 있을 때만) ---
+    if not df_sector.empty:
+        df = df.merge(df_sector, on="ticker", how="left")
 
     # --- 유동성 필터 (NULL은 필터 통과, 실값이 있을 때만 임계값 적용) ---
     before = len(df)
@@ -154,6 +190,16 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     for pat in _PATTERNS:
         df[f"pattern_{pat}"] = (df["pattern"] == pat).astype(int)
     df = df.drop(columns=["pattern"])
+
+    # --- scoring_version 원-핫 ---
+    for v in ["live_v1", "live_v2"]:
+        df[f"sv_{v}"] = (df["scoring_version"] == v).astype(int)
+    df = df.drop(columns=["scoring_version"])
+
+    # --- 업종 원-핫 (데이터 있을 때만) ---
+    if "sector" in df.columns:
+        sector_dummies = pd.get_dummies(df["sector"], prefix="sector").astype(int)
+        df = pd.concat([df.drop(columns=["sector"]), sector_dummies], axis=1)
 
     # --- 라벨 9개 동적 생성 ---
     for d in _HOLD_DAYS:

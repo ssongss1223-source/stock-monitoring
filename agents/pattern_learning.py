@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 WINDOW_CANDIDATES = [10, 15, 20, 30, 40]
 FUTURE_DAYS = 5
-SUCCESS_THRESHOLD = 0.03   # +3%
+SUCCESS_THRESHOLD = 0.05   # +5%
 TOP_K = 20
 MIN_DATA_DAYS = 100
 HOLDOUT_DAYS = 100
@@ -22,7 +22,7 @@ CACHE_FILE = Path("data/pattern_cache.json")
 
 
 class StockPatternLearner:
-    """종목별 과거 패턴과 현재 패턴의 코사인 유사도를 계산해 상승 확률을 추정한다."""
+    """종목별 과거 패턴과 현재 패턴의 유클리드 거리를 계산해 상승 확률을 추정한다."""
 
     async def run(self, ticker: str, df: pd.DataFrame | None = None,
                   df_60m: pd.DataFrame | None = None) -> PatternLearningResult:
@@ -95,16 +95,12 @@ class StockPatternLearner:
         if query is None:
             return self._insufficient(ticker)
 
-        # ── Step D: 코사인 유사도 ─────────────────────────────────────────────
-        norms = np.linalg.norm(corpus, axis=1)
-        query_norm = np.linalg.norm(query)
-        if query_norm < 1e-10:
+        # ── Step D: 유클리드 거리 ─────────────────────────────────────────────
+        if np.linalg.norm(query) < 1e-10:
             return self._insufficient(ticker)
 
-        with np.errstate(invalid="ignore", divide="ignore"):
-            sims = (corpus @ query) / (norms * query_norm)
-        sims = np.nan_to_num(sims, nan=-1.0)
-        top_k_idx = np.argsort(sims)[-TOP_K:]
+        dists = np.linalg.norm(corpus - query, axis=1)
+        top_k_idx = np.argsort(dists)[:TOP_K]
 
         # ── Step E: 집계 및 등급 ──────────────────────────────────────────────
         top_labels = labels[top_k_idx]
@@ -152,14 +148,10 @@ def _optimize_window(
             q = _make_vector(train_close, train_vol, train_inv, train_hf, w, start_idx=i)
             if q is None:
                 continue
-            norms = np.linalg.norm(corpus, axis=1)
-            qn = np.linalg.norm(q)
-            if qn < 1e-10:
+            if np.linalg.norm(q) < 1e-10:
                 continue
-            with np.errstate(invalid="ignore", divide="ignore"):
-                sims = (corpus @ q) / (norms * qn)
-            sims = np.nan_to_num(sims, nan=-1.0)
-            top_k_idx = np.argsort(sims)[-TOP_K:]
+            dists = np.linalg.norm(corpus - q, axis=1)
+            top_k_idx = np.argsort(dists)[:TOP_K]
             precisions.append(float(np.mean(labels[top_k_idx])))
         if precisions:
             prec = float(np.mean(precisions))

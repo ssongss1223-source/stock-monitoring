@@ -157,6 +157,8 @@ class VolumeAnalysisAgent:
             "relative_turnover_high": _relative_turnover_60m(last_day, profile),
             "vwap_above_60m": _vwap_above_60m(last_day),
             "obv_slope_up_60m": _obv_slope_60m(df_60m),
+            "obv_divergence_60m": _obv_divergence_60m(df_60m),
+            "obv_acceleration_60m": _obv_acceleration_60m(df_60m),
             "foreign_inst_buy": fi_buy,
             "foreign_inst_sell": fi_sell,
         }
@@ -254,6 +256,60 @@ def _obv_slope_60m(df_60m: pd.DataFrame, window: int = 20) -> bool:
     except Exception:
         return False
     return slope > 0
+
+
+def _obv_divergence_60m(df_60m: pd.DataFrame, window: int = 20) -> bool:
+    """최근 20개 60분봉: 가격 횡보(-2%~+3%) + OBV 우상향 (조용한 매집 탐지)."""
+    close_name = _col(df_60m, ("Close", "종가"))
+    vol_name = _col(df_60m, ("Volume", "거래량"))
+    if close_name is None or vol_name is None or len(df_60m) < window:
+        return False
+    recent = df_60m.tail(window)
+    close = recent[close_name].astype(float)
+    vol = recent[vol_name].astype(float)
+
+    price_ret = (close.iloc[-1] - close.iloc[0]) / close.iloc[0]
+    if price_ret >= 0.10:  # 급등 추격 제외
+        return False
+    if not (-0.02 <= price_ret <= 0.03):
+        return False
+
+    direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    obv = (direction * vol).cumsum()
+
+    if obv.iloc[-1] <= obv.iloc[0]:  # ② OBV 변화율 > 0
+        return False
+
+    x = np.arange(len(obv))
+    try:
+        slope = float(np.polyfit(x, obv.values, 1)[0])
+    except Exception:
+        return False
+    return slope > 0  # ③ OBV 회귀 기울기 > 0
+
+
+def _obv_acceleration_60m(df_60m: pd.DataFrame, half: int = 10) -> bool:
+    """최근 10봉 OBV 기울기 > 이전 10봉 기울기 × 1.3 (OBV 상승 가속)."""
+    close_name = _col(df_60m, ("Close", "종가"))
+    vol_name = _col(df_60m, ("Volume", "거래량"))
+    if close_name is None or vol_name is None or len(df_60m) < half * 2:
+        return False
+    recent = df_60m.tail(half * 2)
+    close = recent[close_name].astype(float)
+    vol = recent[vol_name].astype(float)
+    direction = close.diff().apply(lambda x: 1 if x > 0 else (-1 if x < 0 else 0))
+    obv = (direction * vol).cumsum()
+
+    x = np.arange(half)
+    try:
+        prev_slope = float(np.polyfit(x, obv.iloc[:half].values, 1)[0])
+        curr_slope = float(np.polyfit(x, obv.iloc[half:].values, 1)[0])
+    except Exception:
+        return False
+
+    if prev_slope <= 0 or curr_slope <= 0:  # ① ② 두 구간 모두 양수
+        return False
+    return curr_slope > prev_slope * 1.3  # ③ 가속 조건
 
 
 # ── 수급 (pykrx 일봉 기반 유지) ───────────────────────────────────────────────

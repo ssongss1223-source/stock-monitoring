@@ -7,7 +7,7 @@ class MarketContext:
     market: str           # "KOSPI" | "KOSDAQ"
     market_status: str    # "bull" | "sideways" | "bear"
     score: int
-    market_bias: int      # 등급 임계값 페널티: bull=0, sideways=+2, bear=+5
+    market_bias: int      # 장세 상태값: bull=0, sideways=2, bear=5 (market.yaml 참조)
 
 
 @dataclass
@@ -29,7 +29,7 @@ class TechnicalResult:
 class VolumeResult:
     ticker: str
     volume_score: int
-    explosion_imminent: bool    # score >= 12
+    explosion_imminent: bool    # volume_score >= volume.yaml explosion_imminent 임계값
     smart_money_flow: str       # "accumulating" | "neutral" | "distributing"
 
 
@@ -47,6 +47,7 @@ class BuySignal:
     target_price: float     # 참고 목표가
     risk_reward: float      # 손익비
     pattern_score: int = 0  # PatternLearningResult 보너스 점수 (0/1/3)
+    xgb_prob: Optional[float] = None  # ML 매수 확률 (label_3d_5pct)
 
 
 @dataclass

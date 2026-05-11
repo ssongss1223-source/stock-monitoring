@@ -25,12 +25,36 @@ rules:
     points: 3
     description: "최근 20개 60분봉 OBV 기울기 양수 (단기 자금 유입)"
 
+  - id: obv_divergence_60m
+    points: 3
+    description: "OBV 다이버전스: 가격 횡보(-2%~+3%) 중 OBV 우상향 (조용한 매집 탐지)"
+
+  - id: obv_acceleration_60m
+    points: 2
+    description: "OBV 가속: 최근 10봉 기울기 > 이전 10봉 × 1.3 (매집 강도 강화)"
+
   - id: foreign_inst_buy
     points: 3
     description: "외국인/기관 5거래일 순매수 (스마트머니 중기 유입)"
 
-# 최대 가능 점수: 20점
+# 그룹 내 점수 상한 (중복 신호 과대계상 방지)
+volume_group_cap:
+  intraday_volume_anomaly:
+    indicators:
+      - hourly_vol_ratio_p95
+      - hourly_vol_zscore_high
+      - relative_turnover_high
+    max_score: 9
+
+  obv_group:
+    indicators:
+      - obv_slope_up_60m
+      - obv_divergence_60m
+      - obv_acceleration_60m
+    max_score: 5
+
+# 최대 가능 점수: 19점 (intraday 9 + obv 5 + vwap 2 + foreign_inst 3)
 thresholds:
-  explosion_imminent: 12  # 🔥 60% 이상 — 이상 수급 확인
+  explosion_imminent: 11  # 🔥 58% 이상 — 이상 수급 확인
   monitoring: 7           # 🔶 35% 이상 — 모니터링 대기
   pass_below: 6           # 이하 패스

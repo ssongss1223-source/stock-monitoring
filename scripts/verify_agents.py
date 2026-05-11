@@ -67,13 +67,12 @@ async def verify_market():
         print(f"\n  [{name}]")
         info("장세 상태", ctx.market_status.upper())
         info("점수", ctx.score)
-        info("market_bias", f"+{ctx.market_bias}")
         if ctx.market_status == "bear":
-            ok("하락장 감지 → market_bias=+5 적용됨")
+            ok("하락장 감지")
         elif ctx.market_status == "sideways":
-            warn("횡보장 → market_bias=+2 적용됨")
+            warn("횡보장 감지")
         else:
-            ok("상승장 → market_bias=0")
+            ok("상승장 감지")
 
     return markets
 
@@ -193,7 +192,7 @@ async def verify_buy(markets=None, tech=None, vol=None):
         info("결과", "매수 신호 없음 (NONE — 임계값 미달)")
         info("추세 점수", tech.total_score)
         info("거래량 점수", vol.volume_score)
-        info("market_bias", market_ctx.market_bias)
+        info("장세", market_ctx.market_status.upper())
         warn("신호 없음 자체는 정상 — 점수 참고")
 
 
@@ -249,10 +248,10 @@ async def verify_sell():
         ok("SellSignalAgent 정상 동작")
 
 
-# ── 7. 2025-04 폭락기 market_bias 검증 ───────────────────────────────────────
+# ── 7. 2025-04 폭락기 bear 장세 감지 검증 ────────────────────────────────────
 
 async def verify_crash_period():
-    section("7. 2025-04 폭락기 market_bias=+5 검증")
+    section("7. 2025-04 폭락기 bear 장세 감지 검증")
     from core.scoring_engine import ScoringEngine
     from agents.market_filter import MarketFilterAgent
     import config
@@ -261,7 +260,6 @@ async def verify_crash_period():
     engine = ScoringEngine(config.SCORING_CONFIG_DIR)
     agent = MarketFilterAgent(engine)
 
-    # _today()를 패치해서 2025-04-15 기준으로 분석
     original_today = mf_module._today
     original_ago = mf_module._ago
 
@@ -280,11 +278,10 @@ async def verify_crash_period():
             print(f"\n  [{name}]")
             info("장세 상태", ctx.market_status.upper())
             info("점수", ctx.score)
-            info("market_bias", f"+{ctx.market_bias}")
-            if ctx.market_bias >= 5:
-                ok("bear 감지 → market_bias=+5 발동 ✔")
-            elif ctx.market_bias >= 2:
-                warn(f"sideways 판정 → market_bias=+{ctx.market_bias} (bear 미달)")
+            if ctx.market_status == "bear":
+                ok("bear 장세 정상 감지 ✔")
+            elif ctx.market_status == "sideways":
+                warn(f"sideways 판정 (점수={ctx.score}) — bear 미달, 임계값 확인")
             else:
                 warn(f"bull 판정 (점수={ctx.score}) — 데이터 또는 임계값 확인 필요")
     finally:

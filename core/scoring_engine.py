@@ -60,7 +60,18 @@ class ScoringEngine:
         from models.signals import VolumeResult
 
         cfg = self.config["volume"]
-        score = self._apply_rules(cfg["rules"], flags)
+        points_map = {r["id"]: r["points"] for r in cfg["rules"]}
+        group_caps = cfg.get("volume_group_cap", {})
+
+        grouped_ids: set = set()
+        score = 0
+        for grp in group_caps.values():
+            raw = sum(points_map[rid] for rid in grp["indicators"] if flags.get(rid) and rid in points_map)
+            score += min(raw, grp["max_score"])
+            grouped_ids.update(grp["indicators"])
+        for rule in cfg["rules"]:
+            if rule["id"] not in grouped_ids and flags.get(rule["id"]):
+                score += rule["points"]
 
         if flags.get("foreign_inst_buy"):
             smart_money = "accumulating"
@@ -108,36 +119,27 @@ class ScoringEngine:
         self,
         trend_score: int,
         volume_score: int,
-        has_pattern: bool,
-        market_bias: int,
+        market_status: str,
     ) -> str:
         """
-        market_bias(bull=0, sideways=+2, bear=+5)를 임계값에 더해 등급 기준을 높인다.
-        하락장에서도 차단이 아님 — 단지 기준이 높아져 자연스럽게 추천 수가 줄어든다.
+        장세(bull/sideways/bear)별 독립 임계값 적용.
+        trend_min, volume_min, total_min 세 조건 동시 충족 시 등급 부여.
         """
-        cfg = self.config["buy_grade"]
+        grades_cfg = self.config["buy_grade"]["buy_grade"]
+        total = trend_score + volume_score
 
-        s = cfg["grade_S"]
-        if (
-            trend_score >= s["trend_min"] + market_bias
-            and volume_score >= s["volume_min"] + market_bias
-            and (not s["pattern_required"] or has_pattern)
-        ):
-            return "S"
-
-        a = cfg["grade_A"]
-        if (
-            trend_score >= a["trend_min"] + market_bias
-            and volume_score >= a["volume_min"] + market_bias
-        ):
-            return "A"
-
-        b = cfg["grade_B"]
-        if (
-            trend_score >= b["trend_min"] + market_bias
-            and volume_score >= b["volume_min"] + market_bias
-        ):
-            return "B"
+        for grade in ("S", "A", "B"):
+            regime = grades_cfg[grade].get(market_status)
+            if regime is None:
+                continue
+            if regime.get("allowed") is False:
+                continue
+            if (
+                trend_score >= regime["trend_min"]
+                and volume_score >= regime["volume_min"]
+                and total >= regime["total_min"]
+            ):
+                return grade
 
         return "NONE"
 

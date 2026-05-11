@@ -7,6 +7,7 @@ from pykrx import stock
 
 import config
 from agents.buy_signal import BuySignalAgent
+from agents.ml_scorer import score_signals
 from agents.market_filter import MarketFilterAgent
 from agents.pattern_learning import StockPatternLearner
 from agents.report import ReportAgent
@@ -44,7 +45,12 @@ class Orchestrator:
 
     async def run_collect(self) -> None:
         """장 마감 후 데이터 수집 (16:00 KST = 07:00 UTC)."""
+        import time
         logger.info("=== 데이터 수집 시작 ===")
+        start = time.monotonic()
+        counts = [0, 0, 0, 0]  # [ohlcv_ok, ohlcv_fail, hourly_ok, hourly_fail]
+        index_ok = False
+        universe: list = []
         try:
             universe = UniverseManager().get_universe()
             semaphore = asyncio.Semaphore(_CONCURRENCY)
@@ -52,19 +58,38 @@ class Orchestrator:
 
             async def _collect_one(ticker: str, market: str) -> None:
                 async with semaphore:
-                    await loop.run_in_executor(None, OhlcvStore.fetch_and_update_daily, ticker)
                     try:
-                        await loop.run_in_executor(
+                        df = await loop.run_in_executor(None, OhlcvStore.fetch_and_update_daily, ticker)
+                        counts[0 if (df is not None and not df.empty) else 1] += 1
+                    except Exception:
+                        counts[1] += 1
+                    try:
+                        df_h = await loop.run_in_executor(
                             None, HourlyStore.fetch_and_update_hourly, ticker, market
                         )
+                        counts[2 if (df_h is not None and not df_h.empty) else 3] += 1
                     except Exception:
-                        pass
+                        counts[3] += 1
 
             await asyncio.gather(*[_collect_one(t, m) for t, m in universe])
-            await loop.run_in_executor(None, MarketIndexStore.fetch_and_update)
+            try:
+                await loop.run_in_executor(None, MarketIndexStore.fetch_and_update)
+                index_ok = True
+            except Exception:
+                logger.exception("지수 데이터 수집 오류")
         except Exception:
             logger.exception("데이터 수집 오류")
+        elapsed = int(time.monotonic() - start)
         logger.info("=== 데이터 수집 완료 ===")
+        await self.report_agent.send_collect_report(
+            total=len(universe),
+            ohlcv_ok=counts[0],
+            ohlcv_fail=counts[1],
+            hourly_ok=counts[2],
+            hourly_fail=counts[3],
+            index_ok=index_ok,
+            elapsed_sec=elapsed,
+        )
 
     async def run_daily(self) -> None:
         logger.info("=== 일일 분석 시작 ===")
@@ -115,8 +140,12 @@ class Orchestrator:
             logger.warning("종목 분석 중 예외 %d건 발생 (개별 종목 건너뜀)", len(errs))
         logger.info("매수 신호: %d종목 (전체 %d종목 분석)", len(buy_signals), len(universe))
 
-        # ── 4. signal_history 저장 ────────────────────────────────────────────
+        # ── 4. XGBoost 추론 + signal_history 저장 ────────────────────────────
         if buy_signals:
+            try:
+                score_signals(buy_signals)
+            except Exception:
+                logger.exception("XGBoost 추론 실패 — xgb_prob 없이 계속")
             _save_signal_history(buy_signals)
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
@@ -181,7 +210,15 @@ class Orchestrator:
 
 
 def _save_signal_history(signals: list[BuySignal]) -> None:
-    today = date.today()
+    # 분석 기준일 = 마지막 거래일 (T-1)
+    # VM은 08:00 KST에 전날 데이터를 분석하므로 signal_date = T-1
+    conn_r = get_conn(read_only=True)
+    try:
+        row = conn_r.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()
+        signal_date = row[0] if row[0] else date.today()
+    finally:
+        conn_r.close()
+
     conn = get_conn()
     try:
         for s in signals:
@@ -196,9 +233,9 @@ def _save_signal_history(signals: list[BuySignal]) -> None:
             })
             conn.execute(
                 """INSERT OR REPLACE INTO signal_history
-                   (signal_date, ticker, vol_score, grade, features, entry_price)
-                   VALUES (?, ?, ?, ?, ?, ?)""",
-                [today, s.ticker, s.volume_score, s.grade, features, s.current_price],
+                   (signal_date, ticker, vol_score, grade, features, entry_price, scoring_version)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                [signal_date, s.ticker, s.volume_score, s.grade, features, s.current_price, 'live_v2'],
             )
         logger.info("signal_history 저장: %d건", len(signals))
     except Exception:

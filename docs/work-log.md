@@ -5,6 +5,56 @@
 
 ---
 
+## 2026-05-11 세션 27 — vol_score 재설계 + backfill 730일 + 모델 재학습
+- 작업: backfill vol_score 분포 불일치 해소, 데이터 확장, XGBoost 재학습
+- 변경 사항:
+  - `agents/orchestrator.py`: T vs T-1 signal_date 버그 수정 (`MAX(date) FROM ohlcv_daily` 사용)
+  - `scripts/backfill_signals.py`: `_vol_score_daily()` 제거 → `_vol_flags_daily()` 추가 (8지표 daily proxy, live_v2 동일 구조), `scoring_version='live_v2'`로 변경
+  - `scripts/feature_engineering.py`: scoring_version 원-핫에서 'backfill' 제거 → live_v1/v2만 유지
+  - DB: `amount` NULL → `UPDATE ohlcv_daily SET amount=close*volume` (225,841건 채움)
+  - DB: `scoring_version='backfill'` → `'live_v2'` 일괄 변환 (56,748건)
+- 관련 파일: `agents/orchestrator.py`, `scripts/backfill_signals.py`, `scripts/feature_engineering.py`
+- 메모:
+  - backfill --days 730 결과: 48,450건 신규 생성 (기존 8,298 포함 총 56,838건)
+  - 이전 label_10d_10pct AUC 0.6697은 vol_score 분포 불일치(0~6 vs 7~20)로 인한 허위 성능
+  - 재학습 결과: label_3d_5pct AUC 0.6168이 가장 안정적, 권장 타겟으로 변경
+  - market_cap NULL은 close×volume으로 대체 불가, KRX API 차단으로 보류 유지
+- 다음 아이디어: XGBoost → BuySignalAgent 연동 (xgb_prob 필드 + 텔레그램 "ML:0.68" 표시)
+
+---
+
+## 2026-05-11 세션 26 — VM 점검 + 텔레그램 수집 알림 추가
+- 작업: VM 운영 상태 확인, KIS API 키 누락 수정, 수집 완료 텔레그램 알림 구현
+- 변경 사항:
+  - `agents/orchestrator.py`: `run_collect()`에 일봉/60분봉 성공/실패 카운팅 추가, 완료 후 `send_collect_report()` 호출
+  - `agents/report.py`: `send_collect_report()` 메서드 + `_build_collect_message()` 빌더 추가 (일봉/60분봉/지수/소요시간 표시)
+  - VM `.env`: KIS_APP_KEY / KIS_APP_SECRET / KIS_BASE_URL 추가, KRX 중복 항목 제거
+- 관련 파일: `agents/orchestrator.py`, `agents/report.py`
+- 메모:
+  - VM은 2026-05-09부터 kospi200_daq150 = 351종목으로 정상 수집 중
+  - KIS 60분봉은 당일치만 수집 (과거 히스토리는 yfinance 전담)
+  - 60분봉 today skip 로직: last_date >= today면 KIS 시도 없이 스킵 → 재실행해도 교체 불가
+- 다음 아이디어: XGBoost를 buy_signal.py에 confidence 점수로 연동
+
+---
+
+## 2026-05-10 세션 23 — VM 소급 backfill 배포 + 실행
+- 작업: backfill 스크립트 2종 + ML 파이프라인 VM 배포, 백그라운드 실행
+- 변경 사항:
+  - `scripts/backfill_signals.py`: 일봉 ohlcv_daily로 90일치 signal_history 소급 생성 (신규)
+  - `scripts/backfill_amount.py`: ohlcv_daily의 amount/market_cap/shares NULL 소급 UPDATE (신규)
+  - git push → VM git pull → 두 backfill 프로세스 백그라운드 실행
+- 관련 파일: `scripts/backfill_signals.py`, `scripts/backfill_amount.py`
+- 메모:
+  - VM 확인: signal_history 133건(2026-05-10만), amount 전체 NULL, backtest_labels 0건
+  - backfill_signals: 59 거래일 × 383 종목 처리 중 (PID 423400, INSERT OR IGNORE)
+  - backfill_amount: pykrx get_market_cap_by_date로 소급 중 (PID 423869)
+  - git safe.directory 오류 → git config --global safe.directory 추가로 해결
+  - VM git pull/python 실행 시 sudo -u root 필요
+- 다음 아이디어: backfill 완료 → labeler --all --save → feature_engineering → XGBoost
+
+---
+
 ## 2026-05-09 세션 21 — 데이터 수집 인프라 전면 정비
 - 작업: KRX 인증 등록, 신규 데이터 5종 추가, Universe 확장, 스케줄 분리, signal_history 활성화
 - 변경 사항:
@@ -40,6 +90,49 @@
   - 공매도 API pykrx KeyError 'output' 경고 — 계속 진행됨 (VM과 동일 이슈)
   - 삼성전자 mock 데이터로 전 구간 로컬 테스트 완료
 - 다음 아이디어: VM에서 labeler --all --save → feature_engineering → XGBoost walk-forward
+
+---
+
+## 2026-05-10 세션 25 — 스코어링 전면 정비 + ML 파이프라인 완성
+- 작업: 하드코딩 감사, 스코어링 YAML-driven 전환, 데이터 추적, ML 학습까지 엔드-투-엔드 완성
+- 변경 사항:
+  - `data/store.py`: amount/market_cap 수집 로직 추가 (get_market_cap_by_date), 신규분부터 NULL 해소
+  - `agents/volume_analysis.py`: OBV Divergence (+3), OBV Acceleration (+2) 추가
+  - `config/scoring/v1_baseline/volume.yaml`: 신규 OBV 규칙, group cap(intraday_vol 9pt, OBV 5pt), explosion_imminent 12→11
+  - `config/scoring/v1_baseline/buy_grade.yaml`: bull/sideways/bear 별 임계값 분리 (완전 재설계)
+  - `config/scoring/v1_baseline/technical.yaml`: rounding_bottom → falling_box_breakout (패턴명 수정)
+  - `core/scoring_engine.py`: group cap 로직, regime-based determine_grade() 구현
+  - `agents/buy_signal.py`: has_pattern 제거, market_status 전달
+  - `data/db.py`: scoring_version 컬럼 마이그레이션 + 소급 설정(vol_score≤6→backfill, 초과→live_v1)
+  - `agents/orchestrator.py`: scoring_version='live_v2' 저장
+  - `scripts/backfill_signals.py`: YAML-driven 가중치(_MA_W, _ICH_W), group cap 기반 vol_max 자동 계산, buy_grade.yaml 임계값 비례 스케일, scoring_version='backfill'
+  - `scripts/feature_engineering.py`: ticker 특성 피처 3개(hist_volatility_20d, log_avg_volume_20d, avg_foreign_exh_rate_20d), scoring_version 원-핫, sector 원-핫 추가
+  - `scripts/train_xgboost.py` 신규: walk-forward TimeSeriesSplit 5-fold + 전체 80/20 최종 모델
+- 관련 파일: 위 전체
+- 메모:
+  - feature_matrix: 11,898건 × 49컬럼, 100% backfill, amount/market_cap 전부 NULL
+  - XGBoost 결과: AUC 0.59~0.67 (label_10d_10pct 최고), top feature = hist_volatility_20d
+  - sv_live_v1/sv_live_v2 피처 분산 없음 (backfill 100%) → scoring_version 피처 현재 무의미
+  - ticker_master 미적재 → sector 피처 생성 안 됨
+  - fold 2-3 best_iter=1 (label_5d_5pct): 데이터 부족 시 조기 수렴, 데이터 축적 필요
+- 다음 아이디어: XGBoost → live 신호 필터 연동, ticker_master 업종 적재, 데이터 축적 후 재학습
+
+---
+
+## 2026-05-10 세션 24 — backfill 디버깅 + 패턴분석 개선 + 로컬 스냅샷
+- 작업: backfill 실패 원인 분석, backfill_signals 메모리 최적화, pattern_learning 개선
+- 변경 사항:
+  - `scripts/backfill_signals.py`: 전체 로드 → 종목별 로드 + 50종목 배치 저장 (OOM 수정)
+  - `agents/pattern_learning.py`: 코사인 유사도 → 정규화 유클리드 거리, SUCCESS_THRESHOLD 3%→5%
+  - `data/pattern_cache.json`: 초기화 (threshold 변경으로 캐시 무효)
+- 관련 파일: `scripts/backfill_signals.py`, `agents/pattern_learning.py`
+- 메모:
+  - backfill_signals 구버전 실패 원인: VM 메모리 969MB 중 920MB 사용 중 → OOM 킬
+  - backfill_amount 실패 원인: KRX API 장기간 반복 요청 차단 (빈 JSON 응답)
+  - 최적화 후 backfill_signals 완료: 16,015건, 약 25분 소요, 메모리 안정적
+  - 로컬 stock.duckdb 스냅샷 복사 완료 (31MB, 2026-05-10 기준)
+  - amount 전체 NULL 문제 미해결 — feature_matrix 생성 시 유동성 필터 일부 무효
+- 다음 아이디어: labeler → feature_engineering → XGBoost walk-forward
 
 ---
 

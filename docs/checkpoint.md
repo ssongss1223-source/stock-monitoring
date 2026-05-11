@@ -1,62 +1,53 @@
 # Checkpoint
 
 ## Current Goal
-- 로컬 backfill 완료 → backtest_labels 생성 → feature_matrix.parquet → XGBoost 착수
+- XGBoost 모델을 실제 매수 신호 필터(xgb_prob 표시)로 연동
 
 ## Current Status
-- 세션 22 완료: ML 피처 엔지니어링 설계 + 구현 완료
-- 로컬 backfill 백그라운드 실행 중 (PID 579, kospi200_daq150 351종목, 약 60~70분 소요)
-- VM은 세션 21 backfill 완료 상태 (signal_history 누적 중)
+- 세션 27 완료: vol_score 분포 불일치 해소 + backfill 730일 확장 + 모델 재학습
+- VM 정상 운영 중: 351종목(kospi200_daq150) 수집 / 분석 스케줄 정상 동작
 
 ## Done
-- **backtest_labels 스키마 wide format 변환** (`data/db.py`):
-  - long format(hold_days/target_return) → wide format(3/5/10일 × max_high/drawdown/return)
-  - init_db()에 migration 추가 (기존 테이블 자동 DROP + 재생성)
-- **labeler.py 재설계** (`backtest/labeler.py`):
-  - label_one(): 단일 패스로 3/5/10일 window 동시 계산
-  - label_batch(): hold_days/target_return 파라미터 제거
-  - CLI: --days/--pct 제거 → --all 추가 (signal_history 전체 처리)
-- **validator.py call site 수정** (`backtest/validator.py`):
-  - label_batch() 새 시그니처 대응, max_high_{d}d로 label 동적 파생
-- **feature_engineering.py 신규** (`scripts/feature_engineering.py`):
-  - signal_history × ohlcv_daily × backtest_labels JOIN
-  - 유동성 필터: --min_volume (3/5/10만주), --min_amount (3/5/10억원), NULL-safe 처리
-  - grade/pattern 원-핫 인코딩
-  - 라벨 9개 동적 생성 (label_3d_3pct ~ label_10d_10pct)
-  - 출력: data/feature_matrix.parquet (피처 ~34개 + 라벨 9개)
-- **로컬 테스트** (삼성전자 005930 mock 데이터):
-  - migration, labeler, feature_engineering 전 구간 동작 확인
+- 스코어링 시스템(regime 등급/OBV/group cap), ML 파이프라인(feature_engineering, train_xgboost), 텔레그램 수집 알림
+- `orchestrator.py`: T→T-1 signal_date 버그 수정
+- `backfill_signals.py`: vol_score 8-indicator daily proxy로 교체 (live_v2 동일 구조)
+- `amount` NULL → close×volume 프록시로 225,841건 채움
+- backfill --days 730: signal_history 56,838건, feature_matrix 48,240건 × 48컬럼
+- **XGBoost 재학습 결과**: label_3d_5pct AUC 0.6168 ← 권장 / label_5d_5pct 0.5968 / label_10d_10pct 0.6038
+  - 주요 피처: hist_volatility_20d, div_yield, pbr, vol_score, trend_score
 
 ## Remaining
-- **[대기 중] 로컬 backfill 완료** (PID 579, logs/backfill_local.log)
-- **[다음] labeler --all --save 실행**:
-  - 로컬: `python backtest/labeler.py --date 2026-05-07 --save` (signal_history 없으므로 날짜 지정)
-  - VM: `python backtest/labeler.py --all --save`
-- **[다음] feature_engineering 실행**:
-  - `python scripts/feature_engineering.py`
-- **[다음] XGBoost Walk-forward**: feature_matrix 확보 후 착수
-- **[보류] technical.yaml 가중치 재조정** (ichimoku 제거, volume_surge 하향)
+- **[즉시] XGBoost → BuySignalAgent 연동**: xgb_prob 필드 추가, 텔레그램 표시
+  - 권장 타겟: label_3d_5pct (AUC 0.6168)
+  - 추론 시 피처 벡터: vol_score, trend_score, hist_volatility_20d 등 27개
+- **[중기] sector 데이터 적재**: ticker_master에 pykrx 업종 정보 채우기
+- **[중기] 라이브 데이터 축적 후 재학습**: live_v2 레코드 충분히 쌓인 후
+- **[보류] market_cap NULL**: close×volume 대체 불가, KRX API 차단으로 보류
 
 ## Risks / Blockers
-- 로컬 signal_history 없음 → feature_matrix 생성 시 실데이터 없음
-  - 해결: VM에서 먼저 full test 권장
-- 로컬 backfill 중 공매도 API 경고 발생 (pykrx KeyError 'output') — VM과 동일 이슈, 계속 진행됨
-- amount/market_cap NULL이면 유동성 필터 비활성화됨 (NULL-safe 처리로 통과, 경고 출력)
-- 60분봉 3개월치로는 ML 학습량 여전히 얇음 (매일 누적 중)
+- amount=close×volume 프록시 → market_cap NULL은 여전히 해결 안 됨
+- ticker_master 비어 있어 sector 피처 없음
+- 학습 데이터 전체가 backfill → live 분포와 여전히 차이 존재
+- KIS 60분봉은 당일치만 수집 가능
 
 ## Next Actions
-1. 로컬 backfill 완료 확인: `tail -f logs/backfill_local.log`
-2. VM에서 `python backtest/labeler.py --all --save` → `python scripts/feature_engineering.py`
-3. feature_matrix shape / 라벨 positive rate 확인 후 XGBoost 착수
+1. **XGBoost 연동**: `models/signals.py`에 `xgb_prob` 필드 추가
+   → `agents/buy_signal.py`에 모델 로드 및 추론 (27개 피처 벡터)
+   → `agents/report.py`에 텔레그램 표시 ("ML:0.68")
+2. **sector 데이터 적재**: `pykrx.stock.get_market_sector_classifications()` → ticker_master
+3. **VM 동기화**: backfill_signals.py, orchestrator.py 수정사항 VM에 배포
 
 ## References
+- **DB**: `data/stock.duckdb` (VM: `/opt/stock-monitor/data/stock.duckdb`)
+- **Feature matrix**: `data/feature_matrix.parquet` (48,240건 × 48컬럼)
+- **모델**: `data/models/xgb_{target}.json` (3개: 5d_5pct, 3d_5pct, 10d_10pct)
+- **모델 결과**: `data/xgb_results.json`
+- **스코어링 설정**: `config/scoring/v1_baseline/`
+- **ML 스크립트**: `scripts/feature_engineering.py`, `scripts/train_xgboost.py`
 - **운영 VM**: `instance-20260505-092414` (us-central1-a), `/opt/stock-monitor`
-- **로컬 backfill 로그**: `logs/backfill_local.log` (PID 579)
-- **Labeler**: `backtest/labeler.py`
-- **피처 엔지니어링**: `scripts/feature_engineering.py`
-- **출력**: `data/feature_matrix.parquet`
-- **단계별 전략**: `.claude/plans/단계별 발전 전략 260508.md`
 - **스케줄**: 수집 07:00 UTC(16:00 KST) / 분석 23:00 UTC(08:00 KST)
+- **유니버스**: `kospi200_daq150` = 351종목 (2026-05-09부터 적용)
+- **피처 27개**: vol_score, trend_score, pattern_score, risk_reward, volume, amount, market_cap, per, pbr, div_yield, foreign_exh_rate, short_ratio, turnover_rate, foreign_net_5d, inst_net_5d, log_avg_volume_20d, hist_volatility_20d, avg_foreign_exh_rate_20d, grade_S/A/B, pattern_*(4개), sv_live_v1/v2
 
 ## Last Updated
-- 2026-05-09 세션 22
+- 2026-05-11 세션 27

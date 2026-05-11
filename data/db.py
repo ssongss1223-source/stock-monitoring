@@ -105,6 +105,7 @@ ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS div_yield       DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS foreign_exh_rate DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_volume    BIGINT;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_ratio     DOUBLE;
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS scoring_version VARCHAR;
 """
 
 
@@ -118,6 +119,13 @@ def init_db() -> None:
             conn.execute("DROP TABLE backtest_labels")
         conn.execute(_DDL)
         conn.execute(_MIGRATIONS)
+        # 기존 signal_history 레코드에 scoring_version 소급 설정
+        # vol_score <= 6 은 일봉 근사 backfill, 초과는 60분봉 실시간 구버전
+        conn.execute("""
+            UPDATE signal_history
+            SET scoring_version = CASE WHEN vol_score <= 6 THEN 'backfill' ELSE 'live_v1' END
+            WHERE scoring_version IS NULL
+        """)
 
 
 if __name__ == "__main__":

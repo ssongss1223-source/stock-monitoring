@@ -56,6 +56,6 @@ ma_thresholds:
 # S등급 필요 조건. 수치 점수에 더하지 않고 등급 조건으로만 사용.
 patterns:
   - cup_handle            # 컵앤핸들
-  - rounding_bottom       # 밥그릇
+  - falling_box_breakout  # 하락박스 돌파
   - triangle_convergence  # 삼각수렴
   - bb_squeeze            # 볼린저밴드 수축

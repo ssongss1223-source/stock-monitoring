@@ -1,26 +1,55 @@
-version: "1.0"
-description: "매수 등급 기준 (전략서 11장). market_bias는 임계값에 더해진다."
+version: "2.0"
+description: "매수 등급 기준 (전략서 11장). 장세별 독립 임계값 적용."
 
-# trend_score = TechnicalResult.total_score (MA + 일목균형표)
-# volume_score = VolumeResult.volume_score  (60분봉 기반, 최대 20점)
+# trend_score = TechnicalResult.total_score (MA + 일목균형표, 최대 ~17점)
+# volume_score = VolumeResult.volume_score  (60분봉 기반, 그룹 cap 적용 최대 19점)
+# total_min = trend_score + volume_score 합산 최소값
 
-grade_S:
-  trend_min: 12       # + market_bias 후 실효 임계값: bull=12 / sideways=14 / bear=17
-  volume_min: 10      # 최대 20점 기준 50% — 이상 수급 + 스마트머니 동반 필요
-  pattern_required: false  # lift 1.016 — 예측력 없음, 패턴 요건 제거
+market_regime:
+  bull:
+    condition: market_bias >= 8
+  sideways:
+    condition: market_bias >= 5 and market_bias <= 7
+  bear:
+    condition: market_bias <= 4
 
-grade_A:
-  trend_min: 8        # + market_bias 후: bull=8 / sideways=10 / bear=13
-  volume_min: 7       # 최대 20점 기준 35%
-  pattern_required: false
+buy_grade:
+  S:
+    bull:
+      trend_min: 12
+      volume_min: 13
+      total_min: 28
+    sideways:
+      trend_min: 13
+      volume_min: 14
+      total_min: 31
+    bear:
+      allowed: false
 
-grade_B:
-  trend_min: 5        # + market_bias 후: bull=5 / sideways=7 / bear=10
-  volume_min: 4       # 최대 20점 기준 20%
-  pattern_required: false
+  A:
+    bull:
+      trend_min: 9
+      volume_min: 10
+      total_min: 23
+    sideways:
+      trend_min: 10
+      volume_min: 11
+      total_min: 26
+    bear:
+      trend_min: 13
+      volume_min: 13
+      total_min: 30
 
-# 장세별 등급 임계값 페널티 (market.yaml의 market_bias와 일치해야 함)
-market_bias:
-  bull: 0
-  sideways: 2
-  bear: 5
+  B:
+    bull:
+      trend_min: 6
+      volume_min: 7
+      total_min: 17
+    sideways:
+      trend_min: 7
+      volume_min: 8
+      total_min: 20
+    bear:
+      trend_min: 10
+      volume_min: 12
+      total_min: 27

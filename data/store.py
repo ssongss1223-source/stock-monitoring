@@ -181,6 +181,14 @@ class OhlcvStore:
 
             if new_df is not None and not new_df.empty:
                 try:
+                    cap = stock.get_market_cap_by_date(start_str, today_str, ticker)
+                    if cap is not None and not cap.empty:
+                        new_df["amount"] = cap.get("거래대금", None)
+                        new_df["market_cap"] = cap.get("시가총액", None)
+                        new_df["shares"] = cap.get("상장주식수", cap.get("상장 주식수", None))
+                except Exception as e:
+                    logger.warning("%s 시가총액/거래대금 조회 실패: %s", ticker, e)
+                try:
                     inv = stock.get_market_trading_value_by_date(start_str, today_str, ticker)
                     if inv is not None and not inv.empty:
                         new_df["foreign_net"] = inv.get("외국인합계", None)

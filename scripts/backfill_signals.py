@@ -1,14 +1,15 @@
 """
 signal_history 소급 생성 — 과거 ohlcv_daily로 기술적 분석 실행 후 저장.
 
-일봉 데이터만 사용 (60분봉 없음). vol_score는 일봉 거래량/수급으로 근사.
+일봉 데이터만 사용 (60분봉 없음). vol_score는 live_v2와 동일한 8개 지표를
+일봉으로 근사하여 계산 (최대 19점).
 기존 signal_history 행은 덮어쓰지 않음 (INSERT OR IGNORE).
 
 메모리 최적화: 종목 1개씩 로드, BATCH_SIZE 종목마다 DB 저장.
 
 Usage:
     python scripts/backfill_signals.py --days 90
-    python scripts/backfill_signals.py --days 180 --min_trend 5
+    python scripts/backfill_signals.py --days 730 --min_trend 5
     python scripts/backfill_signals.py --days 90 --from_ticker 005930  # 중단 재개
 """
 from __future__ import annotations
@@ -19,28 +20,34 @@ import logging
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import yaml as _yaml
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from agents.technical_analysis import _detect_pattern, _ichimoku_flags, _ma_flags
+from core.scoring_engine import ScoringEngine
 from data.db import get_conn
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
 
-BATCH_SIZE = 50  # 종목 단위 배치 저장
+BATCH_SIZE = 50
 
-# technical.yaml 기준 점수 (일봉)
-_MA_W = {
-    'price_above_20ma': 1, 'price_above_60ma': 2, 'price_above_120ma': 2,
-    'price_above_240ma': 2, 'ma20_above_ma60': 2, 'ma60_above_ma120': 2,
-    'ma120_uptrend': 2, 'near_52w_high_5pct': 3,
-}
-_ICH_W = {
-    'ichimoku_triple_positive': 5, 'ichimoku_cloud_support': 1,
-    'ichimoku_cloud_break': -3, 'ichimoku_dead_cross': -2,
-}
+_SCORING_DIR = Path(__file__).parent.parent / "config/scoring/v1_baseline"
+_engine = ScoringEngine(str(_SCORING_DIR))
+
+
+def _load_tech_weights() -> tuple[dict, dict]:
+    cfg = _yaml.safe_load((_SCORING_DIR / "technical.yaml").read_text(encoding="utf-8"))
+    return (
+        {r["id"]: r["points"] for r in cfg["ma_rules"]},
+        {r["id"]: r["points"] for r in cfg["ichimoku_rules"]},
+    )
+
+
+_MA_W, _ICH_W = _load_tech_weights()
 
 
 def _trend_score(flags: dict) -> int:
@@ -48,34 +55,98 @@ def _trend_score(flags: dict) -> int:
             + sum(v for k, v in _ICH_W.items() if flags.get(k)))
 
 
-def _vol_score_daily(past: pd.DataFrame) -> int:
-    """일봉 거래량/수급 기반 vol_score 근사 (최대 6점)."""
-    score = 0
-    if len(past) >= 21:
-        avg20 = past['volume'].iloc[-21:-1].mean()
-        if avg20 > 0 and past['volume'].iloc[-1] > avg20 * 1.5:
-            score += 3
+def _vol_flags_daily(past: pd.DataFrame) -> dict:
+    """live_v2와 동일한 8개 지표를 일봉으로 근사. ScoringEngine.score_volume()에 전달."""
+    close = past['close'].astype(float).values
+    vol   = past['volume'].astype(float).values
+    high  = past['high'].astype(float).values
+    low   = past['low'].astype(float).values
+    n = len(past)
+
+    flags: dict = {}
+
+    # 1. hourly_vol_ratio_p95: 오늘 거래량 > 히스토리 P95
+    if n >= 20:
+        p95 = float(np.percentile(vol[:-1], 95))
+        flags['hourly_vol_ratio_p95'] = float(vol[-1]) >= p95
+    else:
+        flags['hourly_vol_ratio_p95'] = False
+
+    # 2. hourly_vol_zscore_high: z-score >= 2.0
+    if n >= 21:
+        hist = vol[-21:-1]
+        std = float(hist.std())
+        flags['hourly_vol_zscore_high'] = (
+            std > 0 and (float(vol[-1]) - float(hist.mean())) / std >= 2.0
+        )
+    else:
+        flags['hourly_vol_zscore_high'] = False
+
+    # 3. relative_turnover_high: 오늘 거래대금 >= P80 (amount 있을 때만)
+    if 'amount' in past.columns:
+        amt = past['amount'].astype(float).values
+        today_amt = amt[-1]
+        if not np.isnan(today_amt):
+            hist_amt = amt[:-1][~np.isnan(amt[:-1])]
+            if len(hist_amt) >= 10:
+                p80 = float(np.percentile(hist_amt, 80))
+                flags['relative_turnover_high'] = p80 > 0 and today_amt >= p80
+            else:
+                flags['relative_turnover_high'] = False
+        else:
+            flags['relative_turnover_high'] = False
+    else:
+        flags['relative_turnover_high'] = False
+
+    # 4. vwap_above_60m proxy: close > typical price (H+L+C)/3
+    typical = (float(high[-1]) + float(low[-1]) + float(close[-1])) / 3
+    flags['vwap_above_60m'] = float(close[-1]) > typical
+
+    # OBV 기반 지표 (5~7)
+    if n >= 20:
+        direction = np.sign(np.diff(close))
+        obv = np.cumsum(np.concatenate([[0.0], direction * vol[1:]]))
+
+        # 5. obv_slope_up_60m: 20일 OBV 기울기 양수
+        x = np.arange(20)
+        slope = float(np.polyfit(x, obv[-20:], 1)[0])
+        flags['obv_slope_up_60m'] = slope > 0
+
+        # 6. obv_divergence_60m: 가격 횡보(-2%~+3%) + OBV 상향
+        price_ret = (float(close[-1]) - float(close[-20])) / float(close[-20]) \
+                    if close[-20] > 0 else 0.0
+        flags['obv_divergence_60m'] = (
+            -0.02 <= price_ret <= 0.03
+            and float(obv[-1]) > float(obv[-20])
+            and slope > 0
+        )
+
+        # 7. obv_acceleration_60m: 최근 10일 기울기 > 이전 10일 × 1.3
+        if n >= 21:
+            prev_slope = float(np.polyfit(np.arange(10), obv[-20:-10], 1)[0])
+            curr_slope = float(np.polyfit(np.arange(10), obv[-10:],    1)[0])
+            flags['obv_acceleration_60m'] = (
+                prev_slope > 0 and curr_slope > 0 and curr_slope > prev_slope * 1.3
+            )
+        else:
+            flags['obv_acceleration_60m'] = False
+    else:
+        flags['obv_slope_up_60m']     = False
+        flags['obv_divergence_60m']   = False
+        flags['obv_acceleration_60m'] = False
+
+    # 8. foreign_inst_buy: 5거래일 순매수
     if 'foreign_net' in past.columns and 'inst_net' in past.columns:
         fn5 = past['foreign_net'].iloc[-5:].fillna(0).sum()
         in5 = past['inst_net'].iloc[-5:].fillna(0).sum()
-        if fn5 + in5 > 0:
-            score += 3
-    return score
+        flags['foreign_inst_buy'] = (fn5 + in5) > 0
+    else:
+        flags['foreign_inst_buy'] = False
 
-
-def _grade(trend: int, vol: int) -> str:
-    # vol_score 최대 6점 기준으로 임계값 완화
-    if trend >= 12 and vol >= 3:
-        return 'S'
-    if trend >= 8 and vol >= 2:
-        return 'A'
-    if trend >= 5:
-        return 'B'
-    return 'NONE'
+    return flags
 
 
 def _flush(rows: list) -> int:
-    """배치 rows를 signal_history에 INSERT OR IGNORE."""
     if not rows:
         return 0
     df_sig = pd.DataFrame(rows)
@@ -83,8 +154,8 @@ def _flush(rows: list) -> int:
     conn_w.register('_sig', df_sig)
     conn_w.execute("""
         INSERT OR IGNORE INTO signal_history
-            (signal_date, ticker, vol_score, grade, features, entry_price)
-        SELECT signal_date, ticker, vol_score, grade, features, entry_price
+            (signal_date, ticker, vol_score, grade, features, entry_price, scoring_version)
+        SELECT signal_date, ticker, vol_score, grade, features, entry_price, scoring_version
         FROM _sig
     """)
     conn_w.close()
@@ -92,7 +163,6 @@ def _flush(rows: list) -> int:
 
 
 def run(days: int, min_trend: int, from_ticker: str | None = None) -> int:
-    # 날짜 범위 계산 (경량 쿼리)
     conn = get_conn(read_only=True)
     max_date = conn.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()[0]
     cutoff = str((pd.Timestamp(max_date) - pd.Timedelta(days=days)).date())
@@ -120,10 +190,9 @@ def run(days: int, min_trend: int, from_ticker: str | None = None) -> int:
         if i % 20 == 0:
             logger.info("[%d/%d] %s", i + 1, len(tickers), ticker)
 
-        # 종목 1개씩 로드 — 피크 메모리 = 종목 1개 분량
         conn = get_conn(read_only=True)
         df_t = conn.execute(
-            "SELECT date, open, high, low, close, volume, foreign_net, inst_net "
+            "SELECT date, open, high, low, close, volume, amount, foreign_net, inst_net "
             "FROM ohlcv_daily WHERE ticker = ? ORDER BY date",
             [ticker]
         ).df()
@@ -150,8 +219,9 @@ def run(days: int, min_trend: int, from_ticker: str | None = None) -> int:
             if ts < min_trend:
                 continue
 
-            vs = _vol_score_daily(past)
-            grade = _grade(ts, vs)
+            vol_flags = _vol_flags_daily(past)
+            vs = _engine.score_volume(vol_flags).volume_score
+            grade = _engine.determine_grade(ts, vs, 'bull')
             if grade == 'NONE':
                 continue
 
@@ -178,16 +248,15 @@ def run(days: int, min_trend: int, from_ticker: str | None = None) -> int:
                     'risk_reward': rr,
                 }),
                 'entry_price': entry_price,
+                'scoring_version': 'live_v2',
             })
 
-        # BATCH_SIZE 종목마다 저장
         if (i + 1) % BATCH_SIZE == 0 and batch_rows:
             saved = _flush(batch_rows)
             total_saved += saved
             logger.info("  -> %d rows saved (total %d)", saved, total_saved)
             batch_rows = []
 
-    # 나머지 저장
     if batch_rows:
         saved = _flush(batch_rows)
         total_saved += saved
@@ -199,9 +268,9 @@ def run(days: int, min_trend: int, from_ticker: str | None = None) -> int:
 
 def main() -> None:
     p = argparse.ArgumentParser(description="signal_history 소급 생성")
-    p.add_argument('--days', type=int, default=90, help='소급 일수 (기본 90일)')
-    p.add_argument('--min_trend', type=int, default=5, help='최소 trend_score (기본 5)')
-    p.add_argument('--from_ticker', default=None, help='이 종목코드부터 재개 (중단 재시작용)')
+    p.add_argument('--days',        type=int, default=90,   help='소급 일수 (기본 90일)')
+    p.add_argument('--min_trend',   type=int, default=5,    help='최소 trend_score (기본 5)')
+    p.add_argument('--from_ticker', default=None,           help='이 종목코드부터 재개')
     args = p.parse_args()
 
     logger.info("소급 시작: 최근 %d일, min_trend=%d", args.days, args.min_trend)

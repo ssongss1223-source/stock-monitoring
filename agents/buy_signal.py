@@ -31,8 +31,7 @@ class BuySignalAgent:
         grade = self.engine.determine_grade(
             trend_score=effective_trend,
             volume_score=vol.volume_score,
-            has_pattern=tech.pattern is not None,
-            market_bias=market_ctx.market_bias,
+            market_status=market_ctx.market_status,
         )
         if grade == "NONE":
             return None

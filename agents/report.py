@@ -32,6 +32,20 @@ class ReportAgent:
         self.token = config.TELEGRAM_BOT_TOKEN
         self.chat_id = config.TELEGRAM_CHAT_ID
 
+    async def send_collect_report(
+        self,
+        total: int,
+        ohlcv_ok: int,
+        ohlcv_fail: int,
+        hourly_ok: int,
+        hourly_fail: int,
+        index_ok: bool,
+        elapsed_sec: int,
+    ) -> bool:
+        message = _build_collect_message(total, ohlcv_ok, ohlcv_fail, hourly_ok, hourly_fail, index_ok, elapsed_sec)
+        logger.info("ReportAgent: 수집 완료 알림 전송")
+        return self._send_chunk(message)
+
     async def send(
         self,
         markets: dict[str, MarketContext],
@@ -114,8 +128,7 @@ def _market_section(markets: dict[str, MarketContext]) -> str:
     for name, ctx in markets.items():
         em = _MARKET_EMOJI.get(ctx.market_status, "❓")
         lines.append(
-            f"  {name}: {em} {ctx.market_status.upper()} "
-            f"(점수 {ctx.score}점, 페널티 +{ctx.market_bias})"
+            f"  {name}: {em} {ctx.market_status.upper()} (점수 {ctx.score}점)"
         )
     return "\n".join(lines)
 
@@ -186,6 +199,8 @@ def _buy_detail_section(
             f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
             f"  손익비: 약 1:{s.risk_reward}"
         )
+        if s.xgb_prob is not None:
+            entry += f"\n  ML(3일+5%): {s.xgb_prob:.0%}"
         pr = pr_by_ticker.get(s.ticker)
         if pr and pr.grade != "INSUFFICIENT":
             pr_em = _PATTERN_GRADE_EMOJI.get(pr.grade, "⚪")
@@ -197,6 +212,35 @@ def _buy_detail_section(
             )
         lines.append(entry)
 
+    return "\n".join(lines)
+
+
+def _build_collect_message(
+    total: int,
+    ohlcv_ok: int,
+    ohlcv_fail: int,
+    hourly_ok: int,
+    hourly_fail: int,
+    index_ok: bool,
+    elapsed_sec: int,
+) -> str:
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+    m, s = divmod(elapsed_sec, 60)
+    elapsed_str = f"{m}분 {s}초" if m else f"{s}초"
+
+    def _status(ok, fail):
+        if fail == 0:
+            return "✅"
+        return "⚠️" if ok > 0 else "❌"
+
+    lines = [
+        f"📦 <b>데이터 수집 완료 — {today}</b>  (16:00 KST)",
+        f"{_status(ohlcv_ok, ohlcv_fail)} 일봉:   {ohlcv_ok}/{total} 종목" + (f"  (실패 {ohlcv_fail})" if ohlcv_fail else ""),
+        f"{_status(hourly_ok, hourly_fail)} 60분봉: {hourly_ok}/{total} 종목" + (f"  (실패 {hourly_fail})" if hourly_fail else ""),
+        f"{'✅' if index_ok else '❌'} 지수:   {'업데이트 완료' if index_ok else '실패'}",
+        f"⏱ 소요시간: {elapsed_str}",
+    ]
     return "\n".join(lines)
 
 
