@@ -98,12 +98,7 @@ def _build_message(
     if sell_signals:
         parts.append(_sell_section(sell_signals))
 
-    # ① 분석대상 전체 종목 목록 (compact)
-    if all_analyzed:
-        buy_tickers = {s.ticker for s in buy_signals}
-        parts.append(_all_stocks_section(all_analyzed, buy_tickers))
-
-    # ② 3일내 +3% 이상 상승 예측 종목 요약
+    # ① 3일내 +3% 이상 상승 예측 종목 요약
     if buy_signals:
         parts.append(_prediction_summary_section(buy_signals))
     else:
