@@ -5,6 +5,24 @@
 
 ---
 
+## 2026-05-12 세션 29 — XGBoost 버그 수정 + 텔레그램 정리
+- 작업: XGBoost 추론 실패 원인 진단 및 수정, 텔레그램 메세지 정리
+- 변경 사항:
+  - `agents/report.py`: 전체 분석대상 목록(350종목) 섹션 제거
+  - VM: scikit-learn 설치 (`sudo pip install scikit-learn`) — XGBoost가 sklearn 의존
+  - VM DB: `signal_history`에 `scoring_version VARCHAR` 컬럼 추가 (ALTER TABLE)
+  - VM: git pull + stock-monitor 서비스 재시작
+- 관련 파일: `agents/report.py`, VM DB 스키마
+- 메모:
+  - 이전 XGBoost 실행은 모두 실패 — signal_history에 xgb_prob 없음 (NOT IN FEATURES)
+  - 실패 원인 1: `ImportError: sklearn needs to be installed`
+  - 실패 원인 2: `scoring_version` 컬럼 없어 INSERT 자체 실패
+  - label_3d_5pct = T+1 시가 기준 T+1~T+3 최고가 +5% 터치 여부 (3일 후가 아닌 3일 내)
+  - 분석 파이프라인 실행 시간 = 약 90분 (세마포어 2 × 351종목)
+- 다음 아이디어: 내일 xgb_prob 분포 확인 후 S등급 필터링 threshold 결정
+
+---
+
 ## 2026-05-11 세션 28 — XGBoost 연동 배포 + 스케줄 조정
 - 작업: 9개 라벨 전체 학습, label_3d_5pct 선택, 추론 모듈 구현, VM 배포
 - 변경 사항:

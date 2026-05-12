@@ -1,64 +1,69 @@
 # Checkpoint
 
 ## Current Goal
-- live 데이터 축적하며 신호 품질 검증 + 다음 고도화 준비
+- XGBoost 정상 동작 확인 + live xgb_prob 분포 검증 후 필터링 적용
 
 ## Current Status
-- XGBoost(label_3d_5pct) 연동 배포 완료, VM 정상 운영 중
-- 351종목 수집 16:00 KST / 분석 07:00 KST (변경됨)
-- 텔레그램 상세에 `ML(3일+5%): XX%` 표시
+- VM 운영 중, 내일 07:00 KST 정기 분석에서 XGBoost 처음으로 정상 실행 예정
+- 텔레그램 전체 분석대상 목록 제거 완료
+- XGBoost 이전 실행은 모두 실패 상태였음 (sklearn 미설치, scoring_version 컬럼 누락)
 
 ## Done
-- 스코어링 시스템, ML 파이프라인(feature_engineering, train_xgboost), backfill 730일
-- 9개 라벨 전체 학습 → label_3d_5pct 선택 (AUC 0.6168, positive 37.5%)
-- `agents/ml_scorer.py`: ohlcv DB 피처 조합 + xgb 추론 → BuySignal.xgb_prob
-- `agents/report.py`: 텔레그램 상세에 ML 확률 표시
-- 분석 스케줄 08:00 → 07:00 KST 변경 (22:00 UTC)
+- 텔레그램 전체 분석대상 목록(350종목) 제거 (`agents/report.py`)
+- VM에 scikit-learn 설치 (XGBoost 추론 필수 의존성)
+- DB 마이그레이션: `signal_history`에 `scoring_version` 컬럼 추가
+- VM git pull + 서비스 재시작 완료
+- label_3d_5pct 정의 확인: **3일 내 최고가**가 진입가(T+1 시가) 대비 +5% 터치 여부 (`backtest/labeler.py`)
 
 ## Remaining
 
 **[즉시]**
-- 없음. 다음 자연스러운 시점: live 신호 수일 축적 후
+- 내일 07:00 KST 텔레그램 수신 후 xgb_prob 분포 확인
+- xgb_prob 분포 보고 필터 threshold 결정 (현재 S등급 내 필터 없음)
+
+**[중기] XGBoost를 실제 필터로 활용**
+- 현재: S등급 기술 신호 → xgb_prob 참고 표시만
+- 목표: S등급 중 xgb_prob >= threshold 만 발송 (또는 순위 상위 N개)
+- 선행: live xgb_prob 분포 확인 필요
 
 **[중기] 신호 사후 검증 자동화**
-- 방향 A: 별도 텔레그램 채널 파서 — 발령 신호 3일 후 수익률 자동 계산·발송
-- 방향 B: `/verify 7` 슬래시 명령 — 최근 N일 신호 성과 조회 (telegram polling)
-- 구현: `signal_history × ohlcv_daily` JOIN → 3거래일 후 max_high 계산
+- `signal_history × ohlcv_daily` JOIN → 3거래일 후 max_high 계산
+- 방향 B: `/verify N` 텔레그램 명령으로 최근 N일 성과 조회
 
 **[중기] 종목 그룹별 모델**
-- 현재 전종목 단일 모델 → 변동성 구간(고/중/저)으로 그룹 분류 후 그룹별 학습
-- 그룹별 최적 라벨도 다를 수 있음 (고변동 → 3d_10pct, 저변동 → 5d_5pct 등)
+- 변동성 구간(고/중/저)별 모델 + 그룹별 라벨 최적화
 - 선행 조건: live 데이터 충분히 축적 + sector 데이터 적재
-
-**[중기] 장세 레이어 강화**
-- 현재: MA 기반 bull/sideways/bear 단일 레이어
-- 추가 후보: VKOSPI(공포지수), 외국인/기관 지수 수급, 섹터 모멘텀
-- 단기 실현: 외국인/기관 5일 net을 지수 레벨에서 집계 → market_ctx에 추가
+- 주의: 그룹 기준 피처(hist_volatility_20d)와 피처 독립성, walk-forward validation 필요
 
 **[중기] sector 데이터 적재**
 - `pykrx.stock.get_market_sector_classifications()` → ticker_master
-- 이후 장세 레이어·그룹 모델에 필요
+
+**[중기] 장세 레이어 강화**
+- 외국인/기관 5일 net을 지수 레벨에서 집계 → market_ctx 추가
 
 **[보류] market_cap NULL**
-- KRX API 차단, close×volume 대체 불가
+- KRX API 차단, 대체 불가
 
 ## Risks / Blockers
-- 학습 데이터 전체 backfill → live 분포 차이 존재 (AUC 0.62 = 참고용)
+- 이전까지 XGBoost 추론이 항상 실패해서 signal_history에 xgb_prob 미저장 → 내일부터 첫 정상 데이터 축적 시작
+- label_3d_5pct = "3일 내 고가 터치" 기준, 실제 수익 실현과는 다름 (고가에 매도 가능 여부 별개)
+- AUC 0.6168 = 참고용, 단독 필터로 쓰기엔 약함
 - ticker_master 비어 있어 sector 피처 없음
 
 ## Next Actions
-1. 수일간 live 신호 수신 후 `xgb_prob` 분포 확인 (의미있는 값 나오는지)
-2. 신호 사후 검증 구현 (방향 B: `/verify` 텔레그램 명령이 단순)
-3. sector 적재 → 장세 레이어 확장
+1. 내일 07:00 KST 텔레그램에서 `ML(3일+5%): XX%` 표시 확인
+2. VM DB에서 xgb_prob 분포 쿼리로 의미있는 threshold 탐색
+3. threshold 결정 후 S등급 → xgb_prob 필터 적용 코드 수정
 
 ## References
 - **DB**: `data/stock.duckdb` (VM: `/opt/stock-monitor/data/stock.duckdb`)
+- **라벨 정의**: `backtest/labeler.py` — entry=T+1시가, max_high_3d=T+1~T+3 최고가
 - **모델**: `data/models/xgb_label_3d_5pct.json` (채택) / 9개 전체 `xgb_label_*.json`
 - **ML 스크립트**: `scripts/feature_engineering.py`, `scripts/train_xgboost.py`
-- **피처 27개**: vol_score, trend_score, pattern_score, risk_reward, volume, amount, market_cap, per, pbr, div_yield, foreign_exh_rate, short_ratio, turnover_rate, foreign_net_5d, inst_net_5d, log_avg_volume_20d, hist_volatility_20d, avg_foreign_exh_rate_20d, grade_S/A/B, pattern_*(4개), sv_live_v1/v2
 - **운영 VM**: `instance-20260505-092414` (us-central1-a), `/opt/stock-monitor`
 - **스케줄**: 수집 07:00 UTC(16:00 KST) / 분석 22:00 UTC(07:00 KST)
 - **유니버스**: `kospi200_daq150` = 351종목
+- **분석 소요시간**: 약 90분 (세마포어=2, 351종목)
 
 ## Last Updated
-- 2026-05-11 22:00
+- 2026-05-12 23:00
