@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import socket
 import sys
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -20,6 +21,9 @@ class _PykrxNoiseFilter(logging.Filter):
             return False
         return not any(kw in msg for kw in self._KEYWORDS)
 
+
+# 모든 소켓 네트워크 호출에 OS 레벨 타임아웃 적용 (pykrx hang 방지)
+socket.setdefaulttimeout(30)
 
 logging.basicConfig(
     level=logging.INFO,
