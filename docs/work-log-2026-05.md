@@ -2,6 +2,19 @@
 
 ---
 
+## 2026-05-16 세션 36 — 5/15 데이터 수동 텔레그램 리포트 실행
+- 작업: 토요일 거래일 체크 우회, VM에서 `_pipeline()` 직접 호출로 5/15 데이터 기준 수동 분석 실행
+- 변경 사항: 없음 (코드 변경 없이 수동 실행만)
+- 관련 파일: `agents/orchestrator.py` (`_pipeline()`)
+- 메모:
+  - `python -c "asyncio.run(orchestrator._pipeline())"` 방식으로 거래일 체크 우회
+  - 장세: KOSPI sideways(6), KOSDAQ sideways(7)
+  - yfinance 60분봉 오류는 정상 (토요일 신규 수집 불가 → DB 캐시 사용)
+  - 약 100분 소요 예정, 완료 시 텔레그램 발송
+- 다음 아이디어: 리포트 확인 후 signal_xgb_probs 분포 쿼리로 soft voting 결과 검증
+
+---
+
 ## 2026-05-16 세션 35 — Soft Voting 전환 + VM 배포
 - 작업: ML inference를 model_meta.json 단일모델 선택 → XGB+LGBM+ET 상시 soft voting으로 전환, VM 배포
 - 변경 사항:
