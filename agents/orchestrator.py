@@ -93,6 +93,9 @@ class Orchestrator:
 
     async def run_daily(self) -> None:
         logger.info("=== 일일 분석 시작 ===")
+        if not _is_trading_day():
+            logger.info("오늘(%s)은 거래일이 아님 — 분석 건너뜀", date.today())
+            return
         try:
             await self._pipeline()
         except Exception:
@@ -214,6 +217,22 @@ class Orchestrator:
                 pattern_result=pattern_result,
             )
             return ticker, name, buy_signal, pattern_result
+
+
+def _is_trading_day() -> bool:
+    """오늘이 한국 주식시장 거래일인지 확인 (주말 + 공휴일 모두 처리)."""
+    today = date.today()
+    if today.weekday() >= 5:   # 토=5, 일=6
+        return False
+    # 평일 공휴일: pykrx KRX 공식 거래일 캘린더로 확인
+    today_str = today.strftime("%Y%m%d")
+    try:
+        biz = stock.get_exchange_business_day_list(today_str, today_str)
+        return len(biz) > 0
+    except Exception:
+        # 함수 미지원 또는 API 오류 → 평일이면 거래일로 간주
+        logger.debug("거래일 캘린더 조회 실패 → 평일 기준 실행")
+        return True
 
 
 def _get_mktcap_rank() -> dict[str, int]:
