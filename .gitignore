@@ -41,6 +41,12 @@ debug_output.txt
 # Claude local
 # =========================
 .claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# =========================
+# Temp scripts
+# =========================
+tmp_*.py
 
 # =========================
 # OS

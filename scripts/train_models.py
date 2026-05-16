@@ -1,12 +1,13 @@
 """
-멀티모델 학습 — feature_matrix.parquet → XGBoost + LightGBM + (CatBoost)
+멀티모델 학습 — feature_matrix.parquet → XGBoost + LightGBM + ExtraTrees + LR Stacking
 
 Walk-forward: TimeSeriesSplit 5-fold, OOF 예측값 수집
-평가: AUC, Precision@K, Return@K (soft voting / rank ensemble 포함)
+평가: AUC, Precision@K, Return@K (soft voting / LR stacking 포함)
 저장:
   data/models/xgb_label_{label}.json
   data/models/lgbm_label_{label}.txt
-  data/models/catboost_label_{label}.cbm  (catboost 설치 시)
+  data/models/et_label_{label}.pkl
+  data/models/lr_stacker_{label}.pkl
   data/oof_predictions.parquet            (OOF 예측값 전체)
   data/model_meta.json                    (라벨별 최고 모델)
 
@@ -33,11 +34,9 @@ except ImportError:
     HAS_LGBM = False
     print("lightgbm 미설치 - XGBoost만 학습합니다.")
 
-try:
-    from catboost import CatBoostClassifier
-    HAS_CATBOOST = True
-except ImportError:
-    HAS_CATBOOST = False
+from sklearn.ensemble import ExtraTreesClassifier
+from sklearn.linear_model import LogisticRegression
+import joblib
 
 _TARGETS = [
     "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
@@ -66,10 +65,9 @@ _LGBM_PARAMS = dict(
     metric="auc", early_stopping_rounds=30,
     random_state=42, n_jobs=-1, verbose=-1,
 )
-_CATBOOST_PARAMS = dict(
-    iterations=500, depth=4, learning_rate=0.05,
-    eval_metric="AUC", early_stopping_rounds=30,
-    random_seed=42, verbose=0,
+_ET_PARAMS = dict(
+    n_estimators=300, max_depth=None, min_samples_leaf=10,
+    class_weight="balanced", random_state=42, n_jobs=-1,
 )
 
 
@@ -150,16 +148,16 @@ def _lgbm_cv(X: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> tuple[list[flo
     return fold_aucs, oof
 
 
-def _catboost_cv(X: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> tuple[list[float], np.ndarray]:
+def _et_cv(X: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> tuple[list[float], np.ndarray]:
     tscv = TimeSeriesSplit(n_splits=n_splits)
     fold_aucs: list[float] = []
     oof = np.full(len(X), np.nan)
     for tr_idx, va_idx in tscv.split(X):
         X_tr, X_va = X.iloc[tr_idx], X.iloc[va_idx]
         y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
-        m = CatBoostClassifier(scale_pos_weight=_spw(y_tr), **_CATBOOST_PARAMS)
-        m.fit(X_tr, y_tr, eval_set=(X_va, y_va))
-        prob = m.predict_proba(X_va)[:, 1]
+        m = ExtraTreesClassifier(**_ET_PARAMS)
+        m.fit(X_tr.fillna(0), y_tr)
+        prob = m.predict_proba(X_va.fillna(0))[:, 1]
         oof[va_idx] = prob
         fold_aucs.append(roc_auc_score(y_va, prob))
     return fold_aucs, oof
@@ -181,10 +179,9 @@ def _lgbm_final(X: pd.DataFrame, y: pd.Series) -> "lgb.LGBMClassifier":
     return m
 
 
-def _catboost_final(X: pd.DataFrame, y: pd.Series) -> "CatBoostClassifier":
-    n_val = max(int(len(X) * 0.2), 1)
-    m = CatBoostClassifier(scale_pos_weight=_spw(y.iloc[:-n_val]), **_CATBOOST_PARAMS)
-    m.fit(X.iloc[:-n_val], y.iloc[:-n_val], eval_set=(X.iloc[-n_val:], y.iloc[-n_val:]))
+def _et_final(X: pd.DataFrame, y: pd.Series) -> ExtraTreesClassifier:
+    m = ExtraTreesClassifier(**_ET_PARAMS)
+    m.fit(X.fillna(0), y)
     return m
 
 
@@ -204,7 +201,7 @@ def main() -> None:
 
     print(f"샘플: {len(df):,}건  피처: {len(fcols)}개")
     print(f"기간: {df['signal_date'].min().date()} ~ {df['signal_date'].max().date()}")
-    print(f"모델: XGBoost" + (" + LightGBM" if HAS_LGBM else "") + (" + CatBoost" if HAS_CATBOOST else ""))
+    print(f"모델: XGBoost" + (" + LightGBM" if HAS_LGBM else "") + " + ExtraTrees + LR Stacking")
     print()
 
     out_dir = Path("data/models")
@@ -250,13 +247,12 @@ def main() -> None:
             row["lgbm_auc"] = float(np.mean(lgbm_fold_aucs))
             print(f"  LGBM  fold AUC: {np.mean(lgbm_fold_aucs):.4f} ± {np.std(lgbm_fold_aucs):.4f}")
 
-        # ── CatBoost CV + OOF ────────────────────────────────────────────
-        if HAS_CATBOOST:
-            cat_fold_aucs, cat_oof = _catboost_cv(X, y)
-            model_oofs["catboost"] = cat_oof
-            oof_df[f"catboost_oof_{label_key}"] = cat_oof
-            row["catboost_auc"] = float(np.mean(cat_fold_aucs))
-            print(f"  CatB  fold AUC: {np.mean(cat_fold_aucs):.4f} ± {np.std(cat_fold_aucs):.4f}")
+        # ── ExtraTrees CV + OOF ───────────────────────────────────────────
+        et_fold_aucs, et_oof = _et_cv(X, y)
+        model_oofs["et"] = et_oof
+        oof_df[f"et_oof_{label_key}"] = et_oof
+        row["et_auc"] = float(np.mean(et_fold_aucs))
+        print(f"  ET    fold AUC: {np.mean(et_fold_aucs):.4f} ± {np.std(et_fold_aucs):.4f}")
 
         # ── Ensemble OOF (OOF 기반 — 재학습 없음) ────────────────────────
         all_oofs = list(model_oofs.values())
@@ -271,6 +267,35 @@ def main() -> None:
             row["rank_auc"] = _auc_from_oof(y, rank_oof)
             print(f"  Soft  OOF AUC:  {row['soft_auc']:.4f}  ← 앙상블")
             print(f"  Rank  OOF AUC:  {row['rank_auc']:.4f}  ← 앙상블")
+
+        # ── LR Stacking (OOF 기반 TimeSeriesSplit) ───────────────────────
+        lr_model = None
+        base_oof_keys = [k for k in model_oofs if k not in ("soft", "rank")]
+        if len(base_oof_keys) >= 2:
+            base_oofs = [model_oofs[k] for k in base_oof_keys]
+            valid_mask = np.ones(len(y), dtype=bool)
+            for o in base_oofs:
+                valid_mask &= ~np.isnan(o)
+            meta_X = np.column_stack([o[valid_mask] for o in base_oofs])
+            meta_y = np.asarray(y)[valid_mask]
+
+            tscv_lr = TimeSeriesSplit(n_splits=5)
+            lr_oof_valid = np.full(len(meta_y), np.nan)
+            for tr_idx, va_idx in tscv_lr.split(meta_X):
+                _lr = LogisticRegression(C=0.1, max_iter=1000, random_state=42)
+                _lr.fit(meta_X[tr_idx], meta_y[tr_idx])
+                lr_oof_valid[va_idx] = _lr.predict_proba(meta_X[va_idx])[:, 1]
+
+            lr_oof = np.full(len(y), np.nan)
+            lr_oof[valid_mask] = lr_oof_valid
+
+            lr_model = LogisticRegression(C=0.1, max_iter=1000, random_state=42)
+            lr_model.fit(meta_X, meta_y)
+
+            model_oofs["lr"] = lr_oof
+            oof_df[f"lr_oof_{label_key}"] = lr_oof
+            row["lr_auc"] = _auc_from_oof(y, lr_oof)
+            print(f"  LR    OOF AUC:  {row['lr_auc']:.4f}  ← stacking")
 
         # ── Step 9: Precision@K, Return@K ────────────────────────────────
         print()
@@ -305,9 +330,12 @@ def main() -> None:
             lgbm_model = _lgbm_final(X, y)
             lgbm_model.booster_.save_model(str(out_dir / f"lgbm_label_{label_key}.txt"))
 
-        if HAS_CATBOOST:
-            cat_model = _catboost_final(X, y)
-            cat_model.save_model(str(out_dir / f"catboost_label_{label_key}.cbm"))
+        et_model = _et_final(X, y)
+        joblib.dump((et_model, list(X.columns)), str(out_dir / f"et_label_{label_key}.pkl"))
+
+        if lr_model is not None:
+            joblib.dump({"model": lr_model, "base_keys": base_oof_keys},
+                        str(out_dir / f"lr_stacker_{label_key}.pkl"))
 
         summary.append(row)
         print()
@@ -316,9 +344,9 @@ def main() -> None:
     print(f"{'='*62}")
     print("  요약 (walk-forward AUC / Precision@20 / Return@20)")
     print(f"{'='*62}")
-    model_names = ["xgb"] + (["lgbm"] if HAS_LGBM else []) + (["catboost"] if HAS_CATBOOST else [])
+    model_names = ["xgb"] + (["lgbm"] if HAS_LGBM else []) + ["et"]
     if len(model_names) >= 2:
-        model_names += ["soft", "rank"]
+        model_names += ["soft", "rank", "lr"]
 
     header = f"  {'타겟':<22s}"
     for n in model_names:

@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-05-16 세션 37 — DuckDB MCP 서버 구축 + 서비스 문서 정비
+- 작업: DuckDB MCP 서버 자체 개발, 서비스 전체 문서 작성
+- 변경 사항:
+  - `mcp/mcp_duckdb.py` 신규 (80줄, read_query/list_tables/describe_table 3개 tool)
+  - `.mcp.json` 신규 (Claude Code MCP 등록)
+  - `docs/system.md` 신규 (서비스 목적/아키텍쳐/파이프라인/향후 방향)
+  - `docs/mlops.md` 신규 (MLOps 흐름/피처 55개/DB 스키마 7개 테이블)
+- 관련 파일: `mcp/mcp_duckdb.py`, `.mcp.json`, `docs/system.md`, `docs/mlops.md`
+- 메모:
+  - MCP 테스트에서 `signal_xgb_probs` 비어있음 확인 (5/16 수동 실행 결과 미반영)
+  - 60분봉 피처 추가 검토 → 3~10일 예측 목표에 불필요 판단, 보류
+  - `.claude/settings.json`에는 mcpServers 불가, `.mcp.json` 사용해야 함
+- 다음 아이디어: 5/19 정규 실행 후 signal_xgb_probs 확인, 사후 검증 자동화
+
+---
+
 ## 2026-05-16 세션 36 — 5/15 데이터 수동 텔레그램 리포트 실행
 - 작업: 토요일 거래일 체크 우회, VM에서 `_pipeline()` 직접 호출로 5/15 데이터 기준 수동 분석 실행
 - 변경 사항: 없음 (코드 변경 없이 수동 실행만)
