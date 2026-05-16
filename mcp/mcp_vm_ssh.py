@@ -1,8 +1,5 @@
 """VM SSH MCP server — GCP VM 명령 실행 전용."""
 import asyncio
-import json
-import os
-import shutil
 import subprocess
 from pathlib import Path
 
@@ -13,30 +10,22 @@ from mcp.server import Server
 VM_INSTANCE = "instance-20260505-092414"
 VM_ZONE = "us-central1-a"
 VM_APP_DIR = "/opt/stock-monitor"
+GCLOUD_CMD = r"C:\Users\KHSong\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
 
 server = Server("vm-ssh")
 
 
-def _gcloud_bin() -> str:
-    # Windows에서는 gcloud.cmd를 우선 탐색
-    for candidate in ("gcloud.cmd", "gcloud"):
-        path = shutil.which(candidate)
-        if path:
-            return path
-    return "gcloud.cmd"
-
-
 def _run_gcloud_ssh(command: str, timeout: int = 60) -> str:
-    gcloud = _gcloud_bin()
-    cmd = f'"{gcloud}" compute ssh {VM_INSTANCE} --zone={VM_ZONE} --quiet --command="{command}"'
+    args = [
+        GCLOUD_CMD, "compute", "ssh", VM_INSTANCE,
+        f"--zone={VM_ZONE}",
+        "--quiet",
+        "--ssh-flag=-o BatchMode=yes",
+        "--ssh-flag=-o ConnectTimeout=20",
+        f"--command={command}",
+    ]
     try:
-        result = subprocess.run(
-            cmd,
-            shell=True,
-            capture_output=True,
-            timeout=timeout,
-            env=os.environ.copy(),
-        )
+        result = subprocess.run(args, capture_output=True, timeout=timeout)
         out = result.stdout.decode("utf-8", errors="replace").strip()
         err = result.stderr.decode("utf-8", errors="replace").strip()
         if result.returncode != 0 and not out:
@@ -102,7 +91,7 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     elif name == "tail_log":
         path = arguments.get("path", "/tmp/run_now.log")
         lines = int(arguments.get("lines", 50))
-        result = await _gcloud_ssh(f"tail -{lines} {path}", timeout=30)
+        result = await _gcloud_ssh(f"tail -{lines} {path}", timeout=60)
         return [types.TextContent(type="text", text=result)]
 
     elif name == "service_status":
@@ -110,14 +99,14 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
             "systemctl is-active stock-monitor && echo '---' && "
             f"journalctl -u stock-monitor -n 20 --no-pager 2>/dev/null || "
             f"tail -20 {VM_APP_DIR}/stock_monitor.log 2>/dev/null",
-            timeout=30,
+            timeout=60,
         )
         return [types.TextContent(type="text", text=result)]
 
     elif name == "service_restart":
         result = await _gcloud_ssh(
             "sudo systemctl restart stock-monitor && sleep 2 && systemctl is-active stock-monitor",
-            timeout=30,
+            timeout=60,
         )
         return [types.TextContent(type="text", text=result)]
 
