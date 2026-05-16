@@ -31,7 +31,7 @@ try:
     HAS_LGBM = True
 except ImportError:
     HAS_LGBM = False
-    print("lightgbm 미설치 — XGBoost만 학습합니다.")
+    print("lightgbm 미설치 - XGBoost만 학습합니다.")
 
 try:
     from catboost import CatBoostClassifier

@@ -235,6 +235,7 @@ def _build_feature_df(signals: list[BuySignal]) -> pd.DataFrame:
         row = {
             "ticker": s.ticker,
             "vol_score": s.volume_score,
+            "total_score": s.total_score,
             "trend_score": s.trend_score,
             "pattern_score": s.pattern_score,
             "risk_reward": s.risk_reward,
