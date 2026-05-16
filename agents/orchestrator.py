@@ -7,7 +7,7 @@ from pykrx import stock
 
 import config
 from agents.buy_signal import BuySignalAgent
-from agents.ml_scorer import score_signals
+from agents.ml_scorer import score_all_labels
 from agents.market_filter import MarketFilterAgent
 from agents.pattern_learning import StockPatternLearner
 from agents.report import ReportAgent
@@ -143,13 +143,18 @@ class Orchestrator:
             logger.warning("종목 분석 중 예외 %d건 발생 (개별 종목 건너뜀)", len(errs))
         logger.info("매수 신호: %d종목 (전체 %d종목 분석)", len(buy_signals), len(universe))
 
-        # ── 4. XGBoost 추론 + signal_history 저장 ────────────────────────────
+        # ── 4. XGBoost 추론 + signal_history / signal_xgb_probs 저장 ──────────
         if buy_signals:
+            xgb_probs: dict[str, dict[str, float]] = {}
             try:
-                score_signals(buy_signals)
+                xgb_probs = score_all_labels(buy_signals)
+                for s in buy_signals:
+                    s.xgb_prob = xgb_probs.get(s.ticker, {}).get("3d_5pct")
             except Exception:
                 logger.exception("XGBoost 추론 실패 — xgb_prob 없이 계속")
             _save_signal_history(buy_signals)
+            if xgb_probs:
+                _save_signal_xgb_probs(xgb_probs)
 
         # ── 4b. market / 시총 순위 세팅 ──────────────────────────────────────
         ticker_market = {t: m for t, m in universe}
@@ -283,6 +288,31 @@ def _save_signal_history(signals: list[BuySignal]) -> None:
         logger.info("signal_history 저장: %d건", len(signals))
     except Exception:
         logger.exception("signal_history 저장 실패")
+    finally:
+        conn.close()
+
+
+def _save_signal_xgb_probs(probs_by_ticker: dict[str, dict[str, float]]) -> None:
+    conn_r = get_conn(read_only=True)
+    try:
+        row = conn_r.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()
+        signal_date = row[0] if row[0] else date.today()
+    finally:
+        conn_r.close()
+
+    conn = get_conn()
+    try:
+        for ticker, label_probs in probs_by_ticker.items():
+            for label, prob in label_probs.items():
+                conn.execute(
+                    """INSERT OR REPLACE INTO signal_xgb_probs
+                       (signal_date, ticker, label, xgb_prob)
+                       VALUES (?, ?, ?, ?)""",
+                    [signal_date, ticker, label, prob],
+                )
+        logger.info("signal_xgb_probs 저장: %d건", sum(len(v) for v in probs_by_ticker.values()))
+    except Exception:
+        logger.exception("signal_xgb_probs 저장 실패")
     finally:
         conn.close()
 

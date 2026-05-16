@@ -1,4 +1,4 @@
-"""XGBoost 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트."""
+"""XGBoost 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트 + 9개 라벨 동시 추론."""
 from __future__ import annotations
 
 import logging
@@ -12,22 +12,17 @@ from models.signals import BuySignal
 
 logger = logging.getLogger(__name__)
 
-_MODEL_PATH = Path("data/models/xgb_label_3d_5pct.json")
+_MODEL_DIR = Path("data/models")
+_LABELS = [
+    "3d_3pct", "3d_5pct", "3d_10pct",
+    "5d_3pct", "5d_5pct", "5d_10pct",
+    "10d_3pct", "10d_5pct", "10d_10pct",
+]
 _PATTERNS = ["cup_handle", "falling_box_breakout", "triangle_convergence", "bb_squeeze"]
 
 
-def score_signals(signals: list[BuySignal]) -> None:
-    """signals의 각 BuySignal.xgb_prob를 인플레이스 업데이트."""
-    if not signals:
-        return
-
-    if not _MODEL_PATH.exists():
-        logger.warning("XGBoost 모델 없음: %s — xgb_prob 스킵", _MODEL_PATH)
-        return
-
-    model = xgb.XGBClassifier()
-    model.load_model(str(_MODEL_PATH))
-
+def _build_feature_df(signals: list[BuySignal]) -> pd.DataFrame:
+    """signals → feature DataFrame (DB 조회 + signal 피처 병합)."""
     in_clause = ", ".join(f"'{s.ticker}'" for s in signals)
 
     conn = get_conn(read_only=True)
@@ -87,14 +82,37 @@ def score_signals(signals: list[BuySignal]) -> None:
         rows.append(row)
 
     df_sig = pd.DataFrame(rows)
-    df = df_sig.merge(df_snap, on="ticker", how="left").merge(df_roll, on="ticker", how="left")
+    return df_sig.merge(df_snap, on="ticker", how="left").merge(df_roll, on="ticker", how="left")
 
-    feature_names = model.get_booster().feature_names
-    X = df[feature_names].fillna(0)
-    probs = model.predict_proba(X)[:, 1]
 
-    prob_map = dict(zip(df["ticker"], probs.tolist()))
+def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
+    """9개 라벨 동시 추론. {ticker: {label: prob}} 반환."""
+    if not signals:
+        return {}
+
+    df = _build_feature_df(signals)
+    result: dict[str, dict[str, float]] = {s.ticker: {} for s in signals}
+
+    for label in _LABELS:
+        path = _MODEL_DIR / f"xgb_label_{label}.json"
+        if not path.exists():
+            logger.warning("모델 없음: %s", path)
+            continue
+        model = xgb.XGBClassifier()
+        model.load_model(str(path))
+        feature_names = model.get_booster().feature_names
+        X = df[feature_names].fillna(0)
+        probs = model.predict_proba(X)[:, 1]
+        for ticker, prob in zip(df["ticker"], probs.tolist()):
+            if ticker in result:
+                result[ticker][label] = prob
+
+    logger.info("XGBoost 9개 라벨 추론 완료: %d종목", len(signals))
+    return result
+
+
+def score_signals(signals: list[BuySignal]) -> None:
+    """signals의 각 BuySignal.xgb_prob(3d_5pct)를 인플레이스 업데이트."""
+    probs = score_all_labels(signals)
     for s in signals:
-        s.xgb_prob = prob_map.get(s.ticker)
-
-    logger.info("XGBoost 추론 완료: %d종목", len(signals))
+        s.xgb_prob = probs.get(s.ticker, {}).get("3d_5pct")

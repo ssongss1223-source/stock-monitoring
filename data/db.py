@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
     return_10d       DOUBLE,
     PRIMARY KEY (signal_date, ticker)
 );
+
+CREATE TABLE IF NOT EXISTS signal_xgb_probs (
+    signal_date DATE,
+    ticker      VARCHAR,
+    label       VARCHAR,
+    xgb_prob    DOUBLE,
+    PRIMARY KEY (signal_date, ticker, label)
+);
 """
 
 
