@@ -276,9 +276,9 @@ def _save_signal_history(signals: list[BuySignal]) -> None:
             })
             conn.execute(
                 """INSERT OR REPLACE INTO signal_history
-                   (signal_date, ticker, vol_score, grade, features, entry_price, scoring_version)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                [signal_date, s.ticker, s.volume_score, s.grade, features, s.current_price, 'live_v2'],
+                   (signal_date, ticker, vol_score, grade, features, entry_price, scoring_version, xgb_prob)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                [signal_date, s.ticker, s.volume_score, s.grade, features, s.current_price, 'live_v2', s.xgb_prob],
             )
         logger.info("signal_history 저장: %d건", len(signals))
     except Exception:

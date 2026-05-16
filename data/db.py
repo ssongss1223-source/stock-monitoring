@@ -70,6 +70,7 @@ CREATE TABLE IF NOT EXISTS signal_history (
     grade       VARCHAR,
     features    JSON,
     entry_price DOUBLE,
+    xgb_prob    DOUBLE,
     PRIMARY KEY (signal_date, ticker)
 );
 
@@ -106,6 +107,7 @@ ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS foreign_exh_rate DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_volume    BIGINT;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_ratio     DOUBLE;
 ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS scoring_version VARCHAR;
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS xgb_prob DOUBLE;
 """
 
 
