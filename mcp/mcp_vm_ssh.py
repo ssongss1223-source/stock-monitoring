@@ -17,7 +17,7 @@ server = Server("vm-ssh")
 
 def _run_gcloud_ssh(command: str, timeout: int = 60) -> str:
     args = [
-        GCLOUD_CMD, "compute", "ssh", VM_INSTANCE,
+        "cmd.exe", "/c", GCLOUD_CMD, "compute", "ssh", VM_INSTANCE,
         f"--zone={VM_ZONE}",
         "--quiet",
         "--ssh-flag=-o BatchMode=yes",
