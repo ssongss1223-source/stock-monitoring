@@ -181,23 +181,16 @@ class Orchestrator:
             market_ctx = markets.get(market_name, markets.get("KOSPI"))
             name = _get_name(ticker)
 
-            # ── 1. 일봉 영속 로드 (증분 업데이트) ──
-            try:
-                df_daily = await asyncio.wait_for(
-                    loop.run_in_executor(None, OhlcvStore.fetch_and_update_daily, ticker),
-                    timeout=30.0,
-                )
-            except asyncio.TimeoutError:
-                logger.warning("%s 일봉 fetch 타임아웃(30s) — 건너뜀", ticker)
+            # ── 1. 일봉 DB 읽기 (수집은 run_collect에서 완료됨) ──
+            df_daily = await loop.run_in_executor(None, OhlcvStore.load_daily, ticker)
+            if df_daily is None:
+                logger.warning("%s 일봉 데이터 없음 — 건너뜀 (run_collect 먼저 실행 필요)", ticker)
                 return ticker, name, None, StockPatternLearner._insufficient(ticker)
 
-            # ── 2. 60분봉 영속 로드 (실패해도 계속) ──
+            # ── 2. 60분봉 DB 읽기 (실패해도 계속) ──
             try:
-                df_60m = await asyncio.wait_for(
-                    loop.run_in_executor(None, HourlyStore.fetch_and_update_hourly, ticker, market_name),
-                    timeout=30.0,
-                )
-            except (Exception, asyncio.TimeoutError):
+                df_60m = await loop.run_in_executor(None, HourlyStore.load_hourly, ticker)
+            except Exception:
                 df_60m = None
 
             # ── 3. 기술/거래량 분석 (영속 데이터 재사용) ──

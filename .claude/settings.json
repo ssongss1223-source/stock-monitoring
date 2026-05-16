@@ -1,3 +1,15 @@
 {
-  "plansDirectory": ".claude/plans"
+  "plansDirectory": ".claude/plans",
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python scripts/auto_checkpoint.py"
+          }
+        ]
+      }
+    ]
+  }
 }

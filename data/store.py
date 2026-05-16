@@ -155,6 +155,16 @@ class OhlcvStore:
     """일봉 OHLCV 영속화 (DuckDB)."""
 
     @staticmethod
+    def load_daily(ticker: str) -> pd.DataFrame | None:
+        """DB에서만 읽기 (네트워크 호출 없음). 분석 단계 전용."""
+        conn = get_conn(read_only=True)
+        try:
+            result = _read_daily(conn, ticker)
+        finally:
+            conn.close()
+        return result if not result.empty else None
+
+    @staticmethod
     def fetch_and_update_daily(ticker: str, start_days: int = 900) -> pd.DataFrame | None:
         conn = get_conn()
         try:
@@ -246,6 +256,16 @@ class HourlyStore:
                           실패 시 yfinance 증분 (fallback)
     - 오늘 데이터 있음  → 그대로 반환
     """
+
+    @staticmethod
+    def load_hourly(ticker: str) -> pd.DataFrame | None:
+        """DB에서만 읽기 (네트워크 호출 없음). 분석 단계 전용."""
+        conn = get_conn(read_only=True)
+        try:
+            result = _read_min(conn, ticker)
+        finally:
+            conn.close()
+        return result if not result.empty else None
 
     @staticmethod
     def fetch_and_update_hourly(ticker: str, market: str = "KOSPI") -> pd.DataFrame | None:
