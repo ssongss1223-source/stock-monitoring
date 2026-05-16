@@ -5,6 +5,7 @@
 """
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from models.signals import BuySignal
 logger = logging.getLogger(__name__)
 
 _MODEL_DIR = Path("data/models")
+_META_PATH = Path("data/model_meta.json")
 _LABELS = [
     "3d_3pct", "3d_5pct", "3d_10pct",
     "5d_3pct", "5d_5pct", "5d_10pct",
@@ -27,6 +29,19 @@ _PATTERNS = ["cup_handle", "falling_box_breakout", "triangle_convergence", "bb_s
 
 # (모델 접두사, 파일 확장자)
 _MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt"), ("catboost", ".cbm")]
+
+
+def _load_model_meta() -> dict[str, str]:
+    """model_meta.json에서 {label: best_model_prefix} 로드. 없으면 빈 dict."""
+    if not _META_PATH.exists():
+        return {}
+    try:
+        with open(_META_PATH, encoding="utf-8") as f:
+            meta = json.load(f)
+        return {label: info["best"] for label, info in meta.items()}
+    except Exception as e:
+        logger.warning("model_meta.json 로드 실패: %s", e)
+        return {}
 
 
 def _build_feature_df(signals: list[BuySignal]) -> pd.DataFrame:
@@ -122,34 +137,46 @@ def _predict_one(prefix: str, ext: str, label: str, df: pd.DataFrame) -> np.ndar
 
 
 def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
-    """9개 라벨 앙상블 추론. {ticker: {label: prob}} 반환."""
+    """9개 라벨 추론. {ticker: {label: prob}} 반환.
+
+    model_meta.json 있으면 라벨별 최고 모델(단일) 사용.
+    없으면 모든 사용 가능한 모델의 soft voting 앙상블.
+    """
     if not signals:
         return {}
 
     df = _build_feature_df(signals)
     result: dict[str, dict[str, float]] = {s.ticker: {} for s in signals}
+    meta = _load_model_meta()  # {label: best_prefix} or {}
+
+    ext_map = {"xgb": ".json", "lgbm": ".txt", "catboost": ".cbm"}
 
     for label in _LABELS:
-        probs_list = []
-        for prefix, ext in _MODEL_TYPES:
-            p = _predict_one(prefix, ext, label, df)
-            if p is not None:
-                probs_list.append(p)
+        best_prefix = meta.get(label)
 
-        if not probs_list:
-            logger.warning("사용 가능한 모델 없음: label=%s", label)
-            continue
+        if best_prefix:
+            # Step 10: 라벨별 최고 모델만 사용
+            ext = ext_map.get(best_prefix, ".json")
+            probs = _predict_one(best_prefix, ext, label, df)
+            if probs is None:
+                logger.warning("최고 모델 파일 없음(%s %s) — soft voting으로 fallback", best_prefix, label)
+                best_prefix = None  # fallback 트리거
 
-        ensemble = np.mean(probs_list, axis=0)
-        for ticker, prob in zip(df["ticker"], ensemble.tolist()):
+        if not best_prefix:
+            # Soft voting: 존재하는 모든 모델 평균
+            probs_list = [_predict_one(p, e, label, df) for p, e in _MODEL_TYPES]
+            available = [p for p in probs_list if p is not None]
+            if not available:
+                logger.warning("사용 가능한 모델 없음: label=%s", label)
+                continue
+            probs = np.mean(available, axis=0)
+
+        for ticker, prob in zip(df["ticker"], probs.tolist()):
             if ticker in result:
                 result[ticker][label] = float(prob)
 
-    n_models = sum(
-        1 for prefix, ext in _MODEL_TYPES
-        if (_MODEL_DIR / f"{prefix}_label_3d_5pct{ext}").exists()
-    )
-    logger.info("XGBoost 9개 라벨 추론 완료: %d종목 (앙상블 %d모델)", len(signals), n_models)
+    mode = "meta" if meta else "soft-voting"
+    logger.info("ML 추론 완료: %d종목 9라벨 (%s)", len(signals), mode)
     return result
 
 
