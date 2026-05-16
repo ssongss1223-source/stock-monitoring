@@ -173,17 +173,40 @@ def _market_badge(s: BuySignal) -> str:
     return f"[{s.market}{rank_str}]"
 
 
+def _label_tiebreak(label: str | None) -> tuple[int, int]:
+    """ML 동점 tiebreaker: days 짧을수록, % 높을수록 우선. (days, -pct)."""
+    if not label:
+        return (999, 0)
+    try:
+        d, p = label.split("_")
+        return (int(d.replace("d", "")), -int(p.replace("pct", "")))
+    except Exception:
+        return (999, 0)
+
+
+def _is_large_cap(s: BuySignal) -> bool:
+    """KOSPI 100위 이내 or KOSDAQ 50위 이내."""
+    if not s.market or not s.mktcap_rank:
+        return False
+    if s.market == "KOSPI":
+        return s.mktcap_rank <= 100
+    if s.market == "KOSDAQ":
+        return s.mktcap_rank <= 50
+    return False
+
+
 def _sort_signals(
     signals: list[BuySignal],
     pr_by_ticker: dict[str, PatternLearningResult],
 ) -> list[BuySignal]:
-    """ML확률 → 패턴등급 → 손익비 내림차순 정렬, 상위 10종목 cap."""
+    """ML확률 → (days 짧고 % 높은 라벨) → 패턴등급 → 손익비, 상위 10종목 cap."""
     def _key(s: BuySignal):
         ml = -(s.xgb_prob or 0.0)
+        lb = _label_tiebreak(s.best_label)
         pr = pr_by_ticker.get(s.ticker)
         pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
         rr = -s.risk_reward
-        return (ml, pg, rr)
+        return (ml, lb[0], lb[1], pg, rr)
     return sorted(signals, key=_key)[:10]
 
 
@@ -202,41 +225,60 @@ def _prediction_summary_section(signals: list[BuySignal]) -> str:
     return "\n".join(lines)
 
 
+def _stock_entry(
+    s: BuySignal,
+    pr_by_ticker: dict[str, PatternLearningResult],
+) -> str:
+    badge = _market_badge(s)
+    badge_str = f"  {badge}" if badge else ""
+    pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
+    pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
+    star = "⭐ " if s.grade == "S" else ""
+    target_line = (
+        f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
+        if s.target_is_resistance
+        else f"  참고 손절: {s.stop_loss:,.0f}원\n"
+    )
+    ml_line = ""
+    if s.xgb_prob is not None:
+        label_name = _LABEL_DISPLAY.get(s.best_label or "", s.best_label or "3일+5%")
+        ml_line = f"  ML({label_name}): {s.xgb_prob:.0%}\n"
+    entry = (
+        f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
+        + ml_line +
+        f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
+        f"  현재가: {s.current_price:,.0f}원\n"
+        + target_line +
+        f"  손익비: 약 1:{s.risk_reward}"
+    )
+    pr = pr_by_ticker.get(s.ticker)
+    if pr and pr.grade != "INSUFFICIENT":
+        pr_em = _PATTERN_GRADE_EMOJI.get(pr.grade, "⚪")
+        ret_str = f"+{pr.avg_return_5d:.1f}%" if pr.avg_return_5d >= 0 else f"{pr.avg_return_5d:.1f}%"
+        entry += (
+            f"\n  {pr_em} 패턴분석: {pr.grade} | "
+            f"성공률 {pr.pattern_confidence * 100:.0f}% | "
+            f"유사패턴 {pr.similar_count}개 | 평균수익률 {ret_str}"
+        )
+    return entry
+
+
 def _buy_detail_section(
     signals: list[BuySignal],
     pr_by_ticker: dict[str, PatternLearningResult],
 ) -> str:
+    large = [s for s in signals if _is_large_cap(s)]
+    small = [s for s in signals if not _is_large_cap(s)]
+
     lines = ["📊 <b>상승예측 종목 상세</b>"]
-    for s in signals:
-        badge = _market_badge(s)
-        badge_str = f"  {badge}" if badge else ""
-        pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
-        pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
-        star = "★ " if s.grade == "S" else ""
-        if s.target_is_resistance:
-            target_line = f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
-        else:
-            target_line = f"  참고 손절: {s.stop_loss:,.0f}원\n"
-        entry = (
-            f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
-            f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
-            f"  현재가: {s.current_price:,.0f}원\n"
-            + target_line +
-            f"  손익비: 약 1:{s.risk_reward}"
-        )
-        if s.xgb_prob is not None:
-            label_name = _LABEL_DISPLAY.get(s.best_label or "", s.best_label or "3일+5%")
-            entry += f"\n  ML({label_name}): {s.xgb_prob:.0%}"
-        pr = pr_by_ticker.get(s.ticker)
-        if pr and pr.grade != "INSUFFICIENT":
-            pr_em = _PATTERN_GRADE_EMOJI.get(pr.grade, "⚪")
-            ret_str = f"+{pr.avg_return_5d:.1f}%" if pr.avg_return_5d >= 0 else f"{pr.avg_return_5d:.1f}%"
-            entry += (
-                f"\n  {pr_em} 패턴분석: {pr.grade} | "
-                f"성공률 {pr.pattern_confidence * 100:.0f}% | "
-                f"유사패턴 {pr.similar_count}개 | 평균수익률 {ret_str}"
-            )
-        lines.append(entry)
+    if large:
+        lines.append(f"\n🏆 <b>대형주 (KOSPI 100위 / KOSDAQ 50위 이내, {len(large)}종목)</b>")
+        for s in large:
+            lines.append(_stock_entry(s, pr_by_ticker))
+    if small:
+        lines.append(f"\n📈 <b>중소형주 ({len(small)}종목)</b>")
+        for s in small:
+            lines.append(_stock_entry(s, pr_by_ticker))
 
     return "\n".join(lines)
 
