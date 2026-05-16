@@ -182,16 +182,22 @@ class Orchestrator:
             name = _get_name(ticker)
 
             # ── 1. 일봉 영속 로드 (증분 업데이트) ──
-            df_daily = await loop.run_in_executor(
-                None, OhlcvStore.fetch_and_update_daily, ticker
-            )
+            try:
+                df_daily = await asyncio.wait_for(
+                    loop.run_in_executor(None, OhlcvStore.fetch_and_update_daily, ticker),
+                    timeout=30.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("%s 일봉 fetch 타임아웃(30s) — 건너뜀", ticker)
+                return ticker, name, None, StockPatternLearner._insufficient(ticker)
 
             # ── 2. 60분봉 영속 로드 (실패해도 계속) ──
             try:
-                df_60m = await loop.run_in_executor(
-                    None, HourlyStore.fetch_and_update_hourly, ticker, market_name
+                df_60m = await asyncio.wait_for(
+                    loop.run_in_executor(None, HourlyStore.fetch_and_update_hourly, ticker, market_name),
+                    timeout=30.0,
                 )
-            except Exception:
+            except (Exception, asyncio.TimeoutError):
                 df_60m = None
 
             # ── 3. 기술/거래량 분석 (영속 데이터 재사용) ──
