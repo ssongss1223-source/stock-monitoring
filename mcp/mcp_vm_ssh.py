@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 import mcp.server.stdio
@@ -25,25 +26,29 @@ def _gcloud_bin() -> str:
     return "gcloud.cmd"
 
 
-async def _gcloud_ssh(command: str, timeout: int = 60) -> str:
+def _run_gcloud_ssh(command: str, timeout: int = 60) -> str:
     gcloud = _gcloud_bin()
     cmd = f'"{gcloud}" compute ssh {VM_INSTANCE} --zone={VM_ZONE} --quiet --command="{command}"'
-    proc = await asyncio.create_subprocess_shell(
-        cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-        env=os.environ.copy(),
-    )
     try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
-        proc.kill()
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            timeout=timeout,
+            env=os.environ.copy(),
+        )
+        out = result.stdout.decode("utf-8", errors="replace").strip()
+        err = result.stderr.decode("utf-8", errors="replace").strip()
+        if result.returncode != 0 and not out:
+            return f"ERROR (exit {result.returncode}): {err}"
+        return out or err
+    except subprocess.TimeoutExpired:
         return f"ERROR: 타임아웃 ({timeout}s 초과)"
-    out = stdout.decode("utf-8", errors="replace").strip()
-    err = stderr.decode("utf-8", errors="replace").strip()
-    if proc.returncode != 0 and not out:
-        return f"ERROR (exit {proc.returncode}): {err}"
-    return out or err
+
+
+async def _gcloud_ssh(command: str, timeout: int = 60) -> str:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _run_gcloud_ssh, command, timeout)
 
 
 @server.list_tools()
