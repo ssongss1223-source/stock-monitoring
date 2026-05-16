@@ -22,6 +22,11 @@ _ACTION_LABEL = {
     "hold": "보유 유지",
 }
 _PATTERN_GRADE_EMOJI = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}
+_LABEL_DISPLAY = {
+    "3d_3pct": "3일+3%", "3d_5pct": "3일+5%", "3d_10pct": "3일+10%",
+    "5d_3pct": "5일+3%", "5d_5pct": "5일+5%", "5d_10pct": "5일+10%",
+    "10d_3pct": "10일+3%", "10d_5pct": "10일+5%", "10d_10pct": "10일+10%",
+}
 _PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
 
 
@@ -186,8 +191,12 @@ def _prediction_summary_section(signals: list[BuySignal]) -> str:
     for s in signals:
         badge = _market_badge(s)
         prefix = f"{badge} " if badge else ""
-        upside = round((s.target_price / s.current_price - 1) * 100, 1) if s.current_price > 0 else 0
-        lines.append(f"{prefix}[{s.grade}급] <b>{s.name}</b> ({s.ticker}) — 목표 +{upside}%")
+        if s.target_is_resistance and s.current_price > 0:
+            upside = round((s.target_price / s.current_price - 1) * 100, 1)
+            target_str = f" — 목표 +{upside}%"
+        else:
+            target_str = ""
+        lines.append(f"{prefix}[{s.grade}급] <b>{s.name}</b> ({s.ticker}){target_str}")
     return "\n".join(lines)
 
 
@@ -202,15 +211,20 @@ def _buy_detail_section(
         pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
         pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
         star = "★ " if s.grade == "S" else ""
+        if s.target_is_resistance:
+            target_line = f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
+        else:
+            target_line = f"  참고 손절: {s.stop_loss:,.0f}원\n"
         entry = (
             f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
             f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
             f"  현재가: {s.current_price:,.0f}원\n"
-            f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
+            + target_line +
             f"  손익비: 약 1:{s.risk_reward}"
         )
         if s.xgb_prob is not None:
-            entry += f"\n  ML(3일+5%): {s.xgb_prob:.0%}"
+            label_name = _LABEL_DISPLAY.get(s.best_label or "", s.best_label or "3일+5%")
+            entry += f"\n  ML({label_name}): {s.xgb_prob:.0%}"
         pr = pr_by_ticker.get(s.ticker)
         if pr and pr.grade != "INSUFFICIENT":
             pr_em = _PATTERN_GRADE_EMOJI.get(pr.grade, "⚪")

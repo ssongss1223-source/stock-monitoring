@@ -149,7 +149,10 @@ class Orchestrator:
             try:
                 xgb_probs = score_all_labels(buy_signals)
                 for s in buy_signals:
-                    s.xgb_prob = xgb_probs.get(s.ticker, {}).get("3d_5pct")
+                    label_probs = xgb_probs.get(s.ticker, {})
+                    if label_probs:
+                        s.best_label = max(label_probs, key=label_probs.get)
+                        s.xgb_prob = label_probs[s.best_label]
             except Exception:
                 logger.exception("XGBoost 추론 실패 — xgb_prob 없이 계속")
             _save_signal_history(buy_signals)

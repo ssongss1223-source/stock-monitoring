@@ -42,7 +42,7 @@ class BuySignalAgent:
             return None
 
         stop_loss = _calc_stop_loss(current_price, tech)
-        target_price = _calc_target(current_price, tech)
+        target_price, target_is_resistance = _calc_target(current_price, tech)
         risk = current_price - stop_loss
         reward = target_price - current_price
         risk_reward = round(reward / risk, 2) if risk > 0 else 0.0
@@ -62,6 +62,7 @@ class BuySignalAgent:
             current_price=current_price,
             stop_loss=stop_loss,
             target_price=target_price,
+            target_is_resistance=target_is_resistance,
             risk_reward=risk_reward,
             pattern_score=p_bonus,
         )
@@ -89,11 +90,10 @@ def _calc_stop_loss(current_price: float, tech: TechnicalResult) -> float:
     return round(default_stop, 0)
 
 
-def _calc_target(current_price: float, tech: TechnicalResult) -> float:
-    """목표가: 다음 저항선 또는 +10% (저항선이 없거나 너무 가까울 때)."""
+def _calc_target(current_price: float, tech: TechnicalResult) -> tuple[float, bool]:
+    """목표가: (가격, 저항선기반여부). 저항선이 없거나 너무 가까우면 +10% 폴백."""
     if tech.resistance is not None:
         target = float(tech.resistance)
-        # 저항선이 현재가 대비 +3% 이상이면 사용
         if target > current_price * 1.03:
-            return round(target, 0)
-    return round(current_price * 1.10, 0)
+            return round(target, 0), True
+    return round(current_price * 1.10, 0), False
