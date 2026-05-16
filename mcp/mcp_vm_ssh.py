@@ -15,10 +15,9 @@ server = Server("vm-ssh")
 
 
 async def _gcloud_ssh(command: str, timeout: int = 60) -> str:
-    proc = await asyncio.create_subprocess_exec(
-        "gcloud", "compute", "ssh", VM_INSTANCE,
-        f"--zone={VM_ZONE}",
-        f"--command={command}",
+    cmd = f'gcloud compute ssh {VM_INSTANCE} --zone={VM_ZONE} --command="{command}"'
+    proc = await asyncio.create_subprocess_shell(
+        cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
