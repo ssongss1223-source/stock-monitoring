@@ -1,18 +1,22 @@
 """
 ML 피처 엔지니어링 — signal_history × ohlcv_daily × backtest_labels → feature_matrix.parquet
 
-출력 컬럼:
-  - signal_history: vol_score, grade_S/A/B (원-핫), trend_score, pattern_score, risk_reward
-  - pattern 원-핫 (cup_handle / falling_box_breakout / triangle_convergence / bb_squeeze)
-  - ohlcv_daily (signal_date 기준): per, pbr, div_yield, foreign_exh_rate, short_ratio,
-      volume, amount, market_cap, turnover_rate
-  - rolling (signal_date 이전 5거래일): foreign_net_5d, inst_net_5d
-  - backtest_labels: entry_price, max_high_Xd, max_drawdown_Xd, return_Xd
-  - 라벨 9개: label_3d_3pct ~ label_10d_10pct
+v1 피처 (27개):
+  signal_history: vol_score, total_score, grade_S/A/B, trend_score, pattern_score, risk_reward
+  pattern 원-핫 (4개), scoring_version 원-핫 (2개)
+  ohlcv_daily: per, pbr, div_yield, foreign_exh_rate, short_ratio, volume, amount, market_cap, turnover_rate
+  rolling: foreign_net_5d, inst_net_5d, log_avg_volume_20d, hist_volatility_20d, avg_foreign_exh_rate_20d
+
+v2 추가 피처 (~13개):
+  MA 기반: close_to_20ma_ratio, close_to_60ma_ratio, close_to_52w_high
+  기술적: rsi_14, bb_position, obv_slope_5d
+  공매도: short_balance_ratio, short_volume_ratio_5d
+  거래량: volume_surge_ratio
+  시장: kospi_return_20d, kospi_above_ma60, relative_strength_5d
+  signal_history.features: total_score
 
 Usage:
     python scripts/feature_engineering.py
-    python scripts/feature_engineering.py --min_volume 30000 --min_amount 300000000
     python scripts/feature_engineering.py --output data/fm_v2.parquet
 """
 
@@ -64,12 +68,106 @@ def _parse_features_col(series: pd.Series) -> pd.DataFrame:
         else:
             f = {}
         return {
+            "total_score": f.get("total_score", 0),
             "trend_score": f.get("trend_score", 0),
             "pattern_score": f.get("pattern_score", 0),
             "risk_reward": f.get("risk_reward", 0.0),
             "pattern": f.get("pattern"),
         }
     return series.apply(_parse).apply(pd.Series)
+
+
+def _build_v2_ohlcv_features(conn) -> pd.DataFrame:
+    """v2 기술적 피처: MA, RSI, BB, OBV, 공매도, 거래량 surge + 5일 수익률."""
+    return conn.execute("""
+        WITH
+        ma AS (
+            SELECT ticker, date, close, volume, high,
+                   AVG(close)  OVER w20     AS ma20,
+                   AVG(close)  OVER w60     AS ma60,
+                   MAX(high)   OVER w252    AS high_52w,
+                   STDDEV_POP(close) OVER w20 AS std20,
+                   AVG(volume) OVER w20_lag AS avg_vol_20d
+            FROM ohlcv_daily
+            WINDOW
+                w20     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
+                w60     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW),
+                w252    AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 251 PRECEDING AND CURRENT ROW),
+                w20_lag AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING)
+        ),
+        rsi_raw AS (
+            SELECT ticker, date,
+                   GREATEST(close - LAG(close,1) OVER (PARTITION BY ticker ORDER BY date), 0) AS gain,
+                   GREATEST(LAG(close,1) OVER (PARTITION BY ticker ORDER BY date) - close, 0) AS loss
+            FROM ohlcv_daily
+        ),
+        rsi_avg AS (
+            SELECT ticker, date,
+                   AVG(gain) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_gain,
+                   AVG(loss) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss
+            FROM rsi_raw
+        ),
+        obv_dir AS (
+            SELECT ticker, date, volume,
+                   SIGN(close - LAG(close,1) OVER (PARTITION BY ticker ORDER BY date)) AS dir
+            FROM ohlcv_daily
+        ),
+        obv_val AS (
+            SELECT ticker, date,
+                   SUM(volume * dir) OVER (PARTITION BY ticker ORDER BY date) AS obv
+            FROM obv_dir
+        ),
+        obv_slope AS (
+            SELECT ticker, date,
+                   (obv - LAG(obv,5) OVER (PARTITION BY ticker ORDER BY date))
+                       / NULLIF(ABS(LAG(obv,5) OVER (PARTITION BY ticker ORDER BY date)), 0) AS obv_slope_5d
+            FROM obv_val
+        ),
+        short_roll AS (
+            SELECT ticker, date, short_balance, shares,
+                   AVG(short_ratio) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
+                       AS short_volume_ratio_5d
+            FROM ohlcv_daily
+        ),
+        ret5 AS (
+            SELECT ticker, date,
+                   close / NULLIF(LAG(close,5) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS stock_ret_5d
+            FROM ohlcv_daily
+        )
+        SELECT
+            ma.ticker, ma.date,
+            ma.close / NULLIF(ma.ma20, 0) - 1                                   AS close_to_20ma_ratio,
+            ma.close / NULLIF(ma.ma60, 0) - 1                                   AS close_to_60ma_ratio,
+            ma.close / NULLIF(ma.high_52w, 0) - 1                               AS close_to_52w_high,
+            (ma.close - (ma.ma20 - 2*ma.std20)) / NULLIF(4*ma.std20, 0)         AS bb_position,
+            CASE WHEN rsi_avg.avg_loss = 0 THEN 100.0
+                 ELSE 100 - 100 / (1 + rsi_avg.avg_gain / NULLIF(rsi_avg.avg_loss, 0))
+            END                                                                  AS rsi_14,
+            obv_slope.obv_slope_5d,
+            sr.short_balance / NULLIF(sr.shares, 0)                             AS short_balance_ratio,
+            sr.short_volume_ratio_5d,
+            ma.volume / NULLIF(ma.avg_vol_20d, 0)                               AS volume_surge_ratio,
+            ret5.stock_ret_5d
+        FROM ma
+        JOIN rsi_avg   ON ma.ticker = rsi_avg.ticker   AND ma.date = rsi_avg.date
+        JOIN obv_slope ON ma.ticker = obv_slope.ticker AND ma.date = obv_slope.date
+        JOIN short_roll sr ON ma.ticker = sr.ticker    AND ma.date = sr.date
+        JOIN ret5      ON ma.ticker = ret5.ticker      AND ma.date = ret5.date
+    """).df()
+
+
+def _build_market_features(conn) -> pd.DataFrame:
+    """v2 시장 피처: kospi_return_20d, kospi_above_ma60, kospi_ret_5d (상대강도용)."""
+    return conn.execute("""
+        SELECT date,
+               close / NULLIF(LAG(close,20) OVER (ORDER BY date), 0) - 1 AS kospi_return_20d,
+               close / NULLIF(LAG(close,5)  OVER (ORDER BY date), 0) - 1 AS kospi_ret_5d,
+               CASE WHEN close >= AVG(close) OVER (ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
+                    THEN 1 ELSE 0 END                                      AS kospi_above_ma60
+        FROM market_index
+        WHERE ticker = '1001'
+        ORDER BY date
+    """).df()
 
 
 def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
@@ -121,6 +219,10 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
 
         # 5. backtest_labels
         df_lbl = conn.execute("SELECT * FROM backtest_labels").df()
+
+        # 6. v2 피처
+        df_v2 = _build_v2_ohlcv_features(conn)
+        df_mkt = _build_market_features(conn)
     finally:
         conn.close()
 
@@ -144,6 +246,10 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     # --- ticker 특성 피처 날짜 타입 통일 ---
     df_ticker["date"] = pd.to_datetime(df_ticker["date"])
 
+    # --- v2 피처 날짜 타입 통일 ---
+    df_v2["date"] = pd.to_datetime(df_v2["date"])
+    df_mkt["date"] = pd.to_datetime(df_mkt["date"])
+
     # --- signal_history × ohlcv_daily JOIN ---
     df = df_sig.merge(
         df_roll,
@@ -163,6 +269,27 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     # --- 업종 JOIN (데이터 있을 때만) ---
     if not df_sector.empty:
         df = df.merge(df_sector, on="ticker", how="left")
+
+    # --- v2 OHLCV 피처 JOIN ---
+    df = df.merge(
+        df_v2,
+        left_on=["ticker", "signal_date"],
+        right_on=["ticker", "date"],
+        how="left",
+    ).drop(columns=["date"], errors="ignore")
+
+    # --- v2 시장 피처 JOIN ---
+    df = df.merge(
+        df_mkt,
+        left_on="signal_date",
+        right_on="date",
+        how="left",
+    ).drop(columns=["date"], errors="ignore")
+
+    # --- 상대강도 = 종목 5일 수익률 - KOSPI 5일 수익률 ---
+    if "stock_ret_5d" in df.columns and "kospi_ret_5d" in df.columns:
+        df["relative_strength_5d"] = df["stock_ret_5d"] - df["kospi_ret_5d"]
+        df = df.drop(columns=["stock_ret_5d", "kospi_ret_5d"])
 
     # --- 유동성 필터 (NULL은 필터 통과, 실값이 있을 때만 임계값 적용) ---
     before = len(df)

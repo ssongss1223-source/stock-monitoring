@@ -1,9 +1,14 @@
-"""XGBoost 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트 + 9개 라벨 동시 추론."""
+"""XGBoost 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트 + 9개 라벨 동시 추론.
+
+앙상블: 라벨별로 xgb_*.json / lgbm_*.txt / catboost_*.cbm 중 존재하는 모든 모델의
+확률 평균을 사용한다. 모델 파일이 없으면 조용히 스킵한다.
+"""
 from __future__ import annotations
 
 import logging
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import xgboost as xgb
 
@@ -19,6 +24,9 @@ _LABELS = [
     "10d_3pct", "10d_5pct", "10d_10pct",
 ]
 _PATTERNS = ["cup_handle", "falling_box_breakout", "triangle_convergence", "bb_squeeze"]
+
+# (모델 접두사, 파일 확장자)
+_MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt"), ("catboost", ".cbm")]
 
 
 def _build_feature_df(signals: list[BuySignal]) -> pd.DataFrame:
@@ -85,8 +93,36 @@ def _build_feature_df(signals: list[BuySignal]) -> pd.DataFrame:
     return df_sig.merge(df_snap, on="ticker", how="left").merge(df_roll, on="ticker", how="left")
 
 
+def _predict_one(prefix: str, ext: str, label: str, df: pd.DataFrame) -> np.ndarray | None:
+    """모델 파일 로드 + 예측. 파일 없거나 패키지 없으면 None 반환."""
+    path = _MODEL_DIR / f"{prefix}_label_{label}{ext}"
+    if not path.exists():
+        return None
+    try:
+        if ext == ".json":
+            model = xgb.XGBClassifier()
+            model.load_model(str(path))
+            feature_names = model.get_booster().feature_names
+            X = df[feature_names].fillna(0)
+            return model.predict_proba(X)[:, 1]
+        elif ext == ".txt":
+            import lightgbm as lgb
+            model = lgb.Booster(model_file=str(path))
+            X = df[model.feature_name()].fillna(0)
+            return model.predict(X)
+        elif ext == ".cbm":
+            from catboost import CatBoostClassifier
+            model = CatBoostClassifier()
+            model.load_model(str(path))
+            X = df[model.feature_names_].fillna(0)
+            return model.predict_proba(X)[:, 1]
+    except Exception as e:
+        logger.warning("모델 로드/추론 실패 %s: %s", path.name, e)
+        return None
+
+
 def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
-    """9개 라벨 동시 추론. {ticker: {label: prob}} 반환."""
+    """9개 라벨 앙상블 추론. {ticker: {label: prob}} 반환."""
     if not signals:
         return {}
 
@@ -94,20 +130,26 @@ def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
     result: dict[str, dict[str, float]] = {s.ticker: {} for s in signals}
 
     for label in _LABELS:
-        path = _MODEL_DIR / f"xgb_label_{label}.json"
-        if not path.exists():
-            logger.warning("모델 없음: %s", path)
-            continue
-        model = xgb.XGBClassifier()
-        model.load_model(str(path))
-        feature_names = model.get_booster().feature_names
-        X = df[feature_names].fillna(0)
-        probs = model.predict_proba(X)[:, 1]
-        for ticker, prob in zip(df["ticker"], probs.tolist()):
-            if ticker in result:
-                result[ticker][label] = prob
+        probs_list = []
+        for prefix, ext in _MODEL_TYPES:
+            p = _predict_one(prefix, ext, label, df)
+            if p is not None:
+                probs_list.append(p)
 
-    logger.info("XGBoost 9개 라벨 추론 완료: %d종목", len(signals))
+        if not probs_list:
+            logger.warning("사용 가능한 모델 없음: label=%s", label)
+            continue
+
+        ensemble = np.mean(probs_list, axis=0)
+        for ticker, prob in zip(df["ticker"], ensemble.tolist()):
+            if ticker in result:
+                result[ticker][label] = float(prob)
+
+    n_models = sum(
+        1 for prefix, ext in _MODEL_TYPES
+        if (_MODEL_DIR / f"{prefix}_label_3d_5pct{ext}").exists()
+    )
+    logger.info("XGBoost 9개 라벨 추론 완료: %d종목 (앙상블 %d모델)", len(signals), n_models)
     return result
 
 
