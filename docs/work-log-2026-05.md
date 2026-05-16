@@ -2,6 +2,45 @@
 
 ---
 
+## 2026-05-16 세션 31 — 멀티모델 + 피처 v2 확장 완성
+- 작업: 9-label 멀티모델 학습 파이프라인 + 피처 27개 확장 + 라이브 추론 동기화
+- 변경 사항:
+  - `data/db.py`: `signal_xgb_probs` 테이블 추가
+  - `agents/orchestrator.py`: `score_all_labels()` 호출, `_save_signal_xgb_probs()` 추가
+  - `scripts/train_models.py` 신규: XGB/LGBM/CatBoost walk-forward 5-fold, OOF 저장, Precision@K/Return@K, `model_meta.json` 최고모델 선택
+  - `scripts/feature_engineering.py`: 피처 v2 확장 — 15개 신규 피처 추가 (price_momentum_3d/10d, close_to_5ma_ratio, ma_cross_5_20, high_low_ratio, body_ratio, amount_surge_ratio, foreign_net_20d, inst_net_20d, combined_net_5d, foreign_exh_change_5d, roe_proxy, short_balance_change_5d, kospi_return_5d, market_volatility_20d)
+  - `agents/ml_scorer.py`: `_build_feature_df()` v2로 교체 (27피처, 전 라벨 동시 추론)
+- 관련 파일: `data/db.py`, `agents/orchestrator.py`, `scripts/train_models.py`, `scripts/feature_engineering.py`, `agents/ml_scorer.py`
+- 메모:
+  - 앙상블: Soft Voting (nanmean) + Rank Ensemble. Logistic Stacking은 데이터 6개월+ 후 검토
+  - `model_meta.json`: label별 Precision@20 기준 최고모델 저장 → 라이브 추론에서 우선 사용
+  - 재학습 미실행 — VM DB 복사 후 labeler → feature_engineering → train_models 순서 필요
+- 다음 아이디어: VM DB 최신 복사 → 재학습 → 모델 배포 → xgb_prob threshold 결정
+
+---
+
+## 2026-05-16 세션 30 — 리포트 포맷 개선 + 거래일 체크 + context 관리 구조 개선
+- 작업: 텔레그램 포맷 전면 개선, 분석 스케줄 변경, 거래일 체크 추가, work-log 월별 분리
+- 변경 사항:
+  - `config.py`: `SCHEDULE_HOUR_UTC` 22→21 (07:00→06:00 KST)
+  - `models/signals.py`: `BuySignal`에 `market`, `mktcap_rank` 필드 추가
+  - `agents/orchestrator.py`: `_is_trading_day()` 추가 (주말+공휴일 스킵), `_get_mktcap_rank()` 추가 (pykrx 시총순위 조회)
+  - `agents/report.py`: 별 제거, `[KOSPI N위]` 배지 추가, 정렬 변경 (패턴등급→ML→목표%), 헤더 문구 수정, KST 06:00으로 변경
+  - `docs/work-log.md`: 인덱스 파일로 교체
+  - `docs/work-log-2026-05.md`: 신규 생성 (세션 12~29 이전)
+  - `.claude/commands/load-context.md`: 3일 경과 시 경고 규칙 추가
+  - `.claude/commands/save-checkpoint.md`: Done 최대 5개 규칙, work-log 월별 파일 참조로 변경
+- 관련 파일: `config.py`, `models/signals.py`, `agents/orchestrator.py`, `agents/report.py`
+- 메모:
+  - `_is_trading_day()`: weekday>=5 즉시 False, 평일은 pykrx `get_exchange_business_day_list`로 공휴일 체크, API 실패 시 평일=거래일 fallback
+  - 시총순위: `_get_mktcap_rank()` → KOSPI/KOSDAQ 각각 sort_values("시가총액") → rank dict
+  - 정렬 기준: `_PATTERN_GRADE_ORDER = {HIGH:0, MEDIUM:1, LOW:2, INSUFFICIENT:3}` → xgb_prob 내림차순 → 목표% 내림차순
+  - 기존 work-log에 템플릿 블록이 중간에 섞여있던 것 정리하여 월별 파일로 분리
+  - 배포 완료: commit 7fa07a5, VM active (running) 확인
+- 다음 아이디어: VM DB에서 xgb_prob 분포 확인 → threshold 결정 → S등급 필터 적용
+
+---
+
 ## 2026-05-12 세션 29 — XGBoost 버그 수정 + 텔레그램 정리
 - 작업: XGBoost 추론 실패 원인 진단 및 수정, 텔레그램 메세지 정리
 - 변경 사항:
