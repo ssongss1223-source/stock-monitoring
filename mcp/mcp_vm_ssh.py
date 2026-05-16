@@ -16,16 +16,15 @@ server = Server("vm-ssh")
 
 
 def _run_gcloud_ssh(command: str, timeout: int = 60) -> str:
-    args = [
-        "cmd.exe", "/c", GCLOUD_CMD, "compute", "ssh", VM_INSTANCE,
-        f"--zone={VM_ZONE}",
-        "--quiet",
-        "--ssh-flag=-o BatchMode=yes",
-        "--ssh-flag=-o ConnectTimeout=20",
-        f"--command={command}",
-    ]
+    cmd = (
+        f'"{GCLOUD_CMD}" compute ssh {VM_INSTANCE}'
+        f' --zone={VM_ZONE} --quiet'
+        f' "--ssh-flag=-o BatchMode=yes"'
+        f' "--ssh-flag=-o ConnectTimeout=20"'
+        f' --command="{command}"'
+    )
     try:
-        result = subprocess.run(args, capture_output=True, timeout=timeout)
+        result = subprocess.run(cmd, shell=True, capture_output=True, timeout=timeout)
         out = result.stdout.decode("utf-8", errors="replace").strip()
         err = result.stderr.decode("utf-8", errors="replace").strip()
         if result.returncode != 0 and not out:
