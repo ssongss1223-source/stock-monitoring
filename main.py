@@ -64,10 +64,10 @@ async def main() -> None:
         (config.SCHEDULE_HOUR_UTC + 9) % 24, config.SCHEDULE_MINUTE_UTC,
     )
 
-    # --run-now 플래그로 즉시 실행 (테스트/수동 실행용)
+    # --run-now 플래그로 즉시 실행 (테스트/수동 실행용) — 거래일 체크 우회
     if "--run-now" in sys.argv:
-        logger.info("--run-now 플래그 감지: 즉시 분석 실행")
-        await orchestrator.run_daily()
+        logger.info("--run-now 플래그 감지: 즉시 분석 실행 (거래일 체크 우회)")
+        await orchestrator.run_daily(force=True)
         return
 
     try:

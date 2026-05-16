@@ -91,9 +91,9 @@ class Orchestrator:
             elapsed_sec=elapsed,
         )
 
-    async def run_daily(self) -> None:
+    async def run_daily(self, force: bool = False) -> None:
         logger.info("=== 일일 분석 시작 ===")
-        if not _is_trading_day():
+        if not force and not _is_trading_day():
             logger.info("오늘(%s)은 거래일이 아님 — 분석 건너뜀", date.today())
             return
         try:
