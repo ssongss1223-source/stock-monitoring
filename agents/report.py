@@ -98,7 +98,9 @@ def _build_message(
     pattern_results: list[PatternLearningResult] | None = None,
     all_analyzed: list[tuple[str, str]] | None = None,
 ) -> str:
-    parts = [_header(), _market_section(markets)]
+    parts = [_header()]
+    if markets:
+        parts.append(_market_section(markets))
 
     if sell_signals:
         parts.append(_sell_section(sell_signals))

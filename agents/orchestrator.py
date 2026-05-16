@@ -43,6 +43,75 @@ class Orchestrator:
         self.buy_agent = BuySignalAgent(self.engine)
         self.report_agent = ReportAgent()
 
+    async def run_resend_last(self) -> None:
+        """signal_history DB에서 마지막 결과를 읽어 텔레그램 재발송 (형식 테스트용)."""
+        logger.info("=== 마지막 리포트 재발송 ===")
+        conn = get_conn(read_only=True)
+        try:
+            row = conn.execute("SELECT MAX(signal_date) FROM signal_history WHERE grade = 'S'").fetchone()
+            if not row or not row[0]:
+                logger.warning("재발송할 signal_history 없음")
+                return
+            signal_date = row[0]
+
+            df = conn.execute("""
+                SELECT ticker, vol_score, grade, features, entry_price, xgb_prob
+                FROM signal_history WHERE signal_date = ? AND grade = 'S'
+            """, [signal_date]).df()
+
+            probs_df = conn.execute("""
+                SELECT ticker, label, xgb_prob FROM signal_xgb_probs WHERE signal_date = ?
+            """, [signal_date]).df()
+        finally:
+            conn.close()
+
+        # 종목별 best_label
+        best_labels: dict[str, tuple[str, float]] = {}
+        if not probs_df.empty:
+            for ticker, group in probs_df.groupby("ticker"):
+                best_row = group.loc[group["xgb_prob"].idxmax()]
+                best_labels[str(ticker)] = (str(best_row["label"]), float(best_row["xgb_prob"]))
+
+        buy_signals: list[BuySignal] = []
+        for _, row in df.iterrows():
+            try:
+                feat = json.loads(row["features"])
+            except Exception:
+                feat = {}
+            rr = float(feat.get("risk_reward", 0))
+            if rr < 2.0:
+                continue
+            s = BuySignal(
+                ticker=str(row["ticker"]),
+                name=_get_name(str(row["ticker"])),
+                grade=str(row["grade"]),
+                total_score=int(feat.get("total_score", 0)),
+                trend_score=int(feat.get("trend_score", 0)),
+                volume_score=int(row["vol_score"]),
+                pattern=feat.get("pattern"),
+                current_price=float(row["entry_price"]),
+                stop_loss=float(feat.get("stop_loss", 0)),
+                target_price=float(feat.get("target_price", 0)),
+                target_is_resistance=bool(feat.get("target_is_resistance", False)),
+                risk_reward=rr,
+                pattern_score=int(feat.get("pattern_score", 0)),
+                market=str(feat.get("market", "")),
+                mktcap_rank=feat.get("mktcap_rank"),
+                best_label=feat.get("best_label"),
+                xgb_prob=float(best_labels[str(row["ticker"])][1]) if str(row["ticker"]) in best_labels else None,
+            )
+            if str(row["ticker"]) in best_labels:
+                s.best_label = best_labels[str(row["ticker"])][0]
+            buy_signals.append(s)
+
+        if not buy_signals:
+            logger.warning("재발송할 S등급(RR≥2.0) 신호 없음")
+            return
+
+        logger.info("재발송: %d종목 (signal_date=%s)", len(buy_signals), signal_date)
+        await self.report_agent.send({}, buy_signals, [], None, None)
+        logger.info("=== 재발송 완료 ===")
+
     async def run_collect(self) -> None:
         """장 마감 후 데이터 수집 (16:00 KST = 07:00 UTC)."""
         import time
@@ -279,7 +348,11 @@ def _save_signal_history(signals: list[BuySignal]) -> None:
                 "pattern_score": s.pattern_score,
                 "stop_loss": s.stop_loss,
                 "target_price": s.target_price,
+                "target_is_resistance": s.target_is_resistance,
                 "risk_reward": s.risk_reward,
+                "market": s.market,
+                "mktcap_rank": s.mktcap_rank,
+                "best_label": s.best_label,
             })
             conn.execute(
                 """INSERT OR REPLACE INTO signal_history

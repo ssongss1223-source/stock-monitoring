@@ -68,6 +68,12 @@ async def main() -> None:
         (config.SCHEDULE_HOUR_UTC + 9) % 24, config.SCHEDULE_MINUTE_UTC,
     )
 
+    # --resend-last: DB에서 마지막 결과 재발송 (텔레그램 형식 테스트용, ~5초)
+    if "--resend-last" in sys.argv:
+        logger.info("--resend-last 플래그 감지: 마지막 리포트 재발송")
+        await orchestrator.run_resend_last()
+        return
+
     # --run-now 플래그로 즉시 실행 (테스트/수동 실행용) — 거래일 체크 우회
     if "--run-now" in sys.argv:
         logger.info("--run-now 플래그 감지: 즉시 분석 실행 (거래일 체크 우회)")
