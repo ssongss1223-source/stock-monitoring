@@ -201,8 +201,9 @@ def _buy_detail_section(
         badge_str = f"  {badge}" if badge else ""
         pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
         pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
+        star = "★ " if s.grade == "S" else ""
         entry = (
-            f"\n<b>[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
+            f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
             f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
             f"  현재가: {s.current_price:,.0f}원\n"
             f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
