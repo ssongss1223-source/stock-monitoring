@@ -4,6 +4,11 @@
       "command": "python",
       "args": ["mcp/mcp_duckdb.py"],
       "cwd": "c:\\Users\\KHSong\\OneDrive\\00_claude_code\\2605_stock_monitoring"
+    },
+    "vm-ssh": {
+      "command": "python",
+      "args": ["mcp/mcp_vm_ssh.py"],
+      "cwd": "c:\\Users\\KHSong\\OneDrive\\00_claude_code\\2605_stock_monitoring"
     }
   }
 }
