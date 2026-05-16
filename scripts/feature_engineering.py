@@ -7,13 +7,18 @@ v1 피처 (27개):
   ohlcv_daily: per, pbr, div_yield, foreign_exh_rate, short_ratio, volume, amount, market_cap, turnover_rate
   rolling: foreign_net_5d, inst_net_5d, log_avg_volume_20d, hist_volatility_20d, avg_foreign_exh_rate_20d
 
-v2 추가 피처 (~13개):
+v2 추가 피처 (~28개):
   MA 기반: close_to_20ma_ratio, close_to_60ma_ratio, close_to_52w_high
-  기술적: rsi_14, bb_position, obv_slope_5d
-  공매도: short_balance_ratio, short_volume_ratio_5d
-  거래량: volume_surge_ratio
-  시장: kospi_return_20d, kospi_above_ma60, relative_strength_5d
-  signal_history.features: total_score
+           close_to_5ma_ratio, ma_cross_5_20
+  기술적:  rsi_14, bb_position, obv_slope_5d
+  캔들:    high_low_ratio, body_ratio
+  공매도:  short_balance_ratio, short_volume_ratio_5d, short_balance_change_5d
+  거래량:  volume_surge_ratio, amount_surge_ratio
+  모멘텀:  price_momentum_3d, price_momentum_10d
+  수급:    foreign_net_20d, inst_net_20d, combined_net_5d, foreign_exh_change_5d
+  재무:    roe_proxy
+  시장:    kospi_return_20d, kospi_return_5d, kospi_above_ma60,
+           market_volatility_20d, relative_strength_5d
 
 Usage:
     python scripts/feature_engineering.py
@@ -78,18 +83,28 @@ def _parse_features_col(series: pd.Series) -> pd.DataFrame:
 
 
 def _build_v2_ohlcv_features(conn) -> pd.DataFrame:
-    """v2 기술적 피처: MA, RSI, BB, OBV, 공매도, 거래량 surge + 5일 수익률."""
+    """v2 기술적 피처 전체.
+
+    v2 기존 (13개): MA 비율, RSI, BB, OBV slope, 공매도 비율, volume/amount surge, 5일 수익률
+    v2 신규 (12개): price_momentum_3d/10d, close_to_5ma_ratio, ma_cross_5_20,
+                    high_low_ratio, body_ratio, amount_surge_ratio,
+                    foreign_net_20d, inst_net_20d, foreign_exh_change_5d,
+                    roe_proxy, short_balance_change_5d
+    """
     return conn.execute("""
         WITH
         ma AS (
-            SELECT ticker, date, close, volume, high,
-                   AVG(close)  OVER w20     AS ma20,
-                   AVG(close)  OVER w60     AS ma60,
-                   MAX(high)   OVER w252    AS high_52w,
-                   STDDEV_POP(close) OVER w20 AS std20,
-                   AVG(volume) OVER w20_lag AS avg_vol_20d
+            SELECT ticker, date, close, open, high, low, volume, amount,
+                   AVG(close)  OVER w5     AS ma5,
+                   AVG(close)  OVER w20    AS ma20,
+                   AVG(close)  OVER w60    AS ma60,
+                   MAX(high)   OVER w252   AS high_52w,
+                   STDDEV_POP(close) OVER w20  AS std20,
+                   AVG(volume) OVER w20_lag AS avg_vol_20d,
+                   AVG(amount) OVER w20_lag AS avg_amt_20d
             FROM ohlcv_daily
             WINDOW
+                w5      AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW),
                 w20     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
                 w60     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW),
                 w252    AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 251 PRECEDING AND CURRENT ROW),
@@ -129,43 +144,99 @@ def _build_v2_ohlcv_features(conn) -> pd.DataFrame:
                        AS short_volume_ratio_5d
             FROM ohlcv_daily
         ),
-        ret5 AS (
+        ret AS (
             SELECT ticker, date,
-                   close / NULLIF(LAG(close,5) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS stock_ret_5d
+                   close / NULLIF(LAG(close,3)  OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS price_momentum_3d,
+                   close / NULLIF(LAG(close,5)  OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS stock_ret_5d,
+                   close / NULLIF(LAG(close,10) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS price_momentum_10d
+            FROM ohlcv_daily
+        ),
+        flows AS (
+            SELECT ticker, date,
+                   SUM(foreign_net) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS foreign_net_20d,
+                   SUM(inst_net)    OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS inst_net_20d,
+                   foreign_exh_rate - LAG(foreign_exh_rate, 5) OVER (PARTITION BY ticker ORDER BY date) AS foreign_exh_change_5d
+            FROM ohlcv_daily
+        ),
+        short_chg AS (
+            SELECT ticker, date,
+                   (short_balance - LAG(short_balance, 5) OVER (PARTITION BY ticker ORDER BY date))
+                       / NULLIF(ABS(LAG(short_balance, 5) OVER (PARTITION BY ticker ORDER BY date)), 0)
+                       AS short_balance_change_5d
+            FROM ohlcv_daily
+        ),
+        valuation AS (
+            SELECT ticker, date,
+                   CASE WHEN bps > 0 THEN CAST(eps AS DOUBLE) / NULLIF(bps, 0) ELSE NULL END AS roe_proxy
             FROM ohlcv_daily
         )
         SELECT
             ma.ticker, ma.date,
-            ma.close / NULLIF(ma.ma20, 0) - 1                                   AS close_to_20ma_ratio,
-            ma.close / NULLIF(ma.ma60, 0) - 1                                   AS close_to_60ma_ratio,
-            ma.close / NULLIF(ma.high_52w, 0) - 1                               AS close_to_52w_high,
-            (ma.close - (ma.ma20 - 2*ma.std20)) / NULLIF(4*ma.std20, 0)         AS bb_position,
+            -- ── v2 기존: MA 비율 ──────────────────────────────────────────────
+            ma.close / NULLIF(ma.ma20, 0) - 1                            AS close_to_20ma_ratio,
+            ma.close / NULLIF(ma.ma60, 0) - 1                            AS close_to_60ma_ratio,
+            ma.close / NULLIF(ma.high_52w, 0) - 1                        AS close_to_52w_high,
+            -- ── v2 신규: MA5 기반 ─────────────────────────────────────────────
+            ma.close / NULLIF(ma.ma5, 0) - 1                             AS close_to_5ma_ratio,
+            CASE WHEN ma.ma5 >= ma.ma20 THEN 1 ELSE 0 END                AS ma_cross_5_20,
+            -- ── v2 기존: BB, RSI, OBV ─────────────────────────────────────────
+            (ma.close - (ma.ma20 - 2*ma.std20)) / NULLIF(4*ma.std20, 0) AS bb_position,
             CASE WHEN rsi_avg.avg_loss = 0 THEN 100.0
                  ELSE 100 - 100 / (1 + rsi_avg.avg_gain / NULLIF(rsi_avg.avg_loss, 0))
-            END                                                                  AS rsi_14,
+            END                                                           AS rsi_14,
             obv_slope.obv_slope_5d,
-            sr.short_balance / NULLIF(sr.shares, 0)                             AS short_balance_ratio,
+            -- ── v2 신규: 캔들 특성 ───────────────────────────────────────────
+            (ma.high - ma.low) / NULLIF(ma.close, 0)                     AS high_low_ratio,
+            (ma.close - ma.open) / NULLIF(ma.high - ma.low, 0)          AS body_ratio,
+            -- ── v2 기존: 공매도 ──────────────────────────────────────────────
+            sr.short_balance / NULLIF(sr.shares, 0)                      AS short_balance_ratio,
             sr.short_volume_ratio_5d,
-            ma.volume / NULLIF(ma.avg_vol_20d, 0)                               AS volume_surge_ratio,
-            ret5.stock_ret_5d
+            -- ── v2 신규: 공매도 잔고 변화 ────────────────────────────────────
+            short_chg.short_balance_change_5d,
+            -- ── v2 기존: 거래량 surge ────────────────────────────────────────
+            ma.volume / NULLIF(ma.avg_vol_20d, 0)                        AS volume_surge_ratio,
+            -- ── v2 신규: 거래대금 surge ──────────────────────────────────────
+            ma.amount / NULLIF(ma.avg_amt_20d, 0)                        AS amount_surge_ratio,
+            -- ── v2 신규: 가격 모멘텀 ─────────────────────────────────────────
+            ret.price_momentum_3d,
+            ret.price_momentum_10d,
+            -- ── v2 신규: 수급 중기 ───────────────────────────────────────────
+            flows.foreign_net_20d,
+            flows.inst_net_20d,
+            flows.foreign_exh_change_5d,
+            -- ── v2 신규: 재무 품질 ───────────────────────────────────────────
+            valuation.roe_proxy,
+            -- ── 상대강도 계산용 (feature_matrix에서 제거됨) ─────────────────
+            ret.stock_ret_5d
         FROM ma
-        JOIN rsi_avg   ON ma.ticker = rsi_avg.ticker   AND ma.date = rsi_avg.date
-        JOIN obv_slope ON ma.ticker = obv_slope.ticker AND ma.date = obv_slope.date
-        JOIN short_roll sr ON ma.ticker = sr.ticker    AND ma.date = sr.date
-        JOIN ret5      ON ma.ticker = ret5.ticker      AND ma.date = ret5.date
+        JOIN rsi_avg    ON ma.ticker = rsi_avg.ticker    AND ma.date = rsi_avg.date
+        JOIN obv_slope  ON ma.ticker = obv_slope.ticker  AND ma.date = obv_slope.date
+        JOIN short_roll sr ON ma.ticker = sr.ticker      AND ma.date = sr.date
+        JOIN ret        ON ma.ticker = ret.ticker        AND ma.date = ret.date
+        JOIN flows      ON ma.ticker = flows.ticker      AND ma.date = flows.date
+        JOIN short_chg  ON ma.ticker = short_chg.ticker  AND ma.date = short_chg.date
+        JOIN valuation  ON ma.ticker = valuation.ticker  AND ma.date = valuation.date
     """).df()
 
 
 def _build_market_features(conn) -> pd.DataFrame:
-    """v2 시장 피처: kospi_return_20d, kospi_above_ma60, kospi_ret_5d (상대강도용)."""
+    """시장 피처: kospi_return_20d/5d, kospi_above_ma60, market_volatility_20d."""
     return conn.execute("""
+        WITH kospi_ret AS (
+            SELECT date, close,
+                   close / NULLIF(LAG(close,1)  OVER (ORDER BY date), 0) - 1 AS daily_ret,
+                   close / NULLIF(LAG(close,5)  OVER (ORDER BY date), 0) - 1 AS kospi_return_5d,
+                   close / NULLIF(LAG(close,20) OVER (ORDER BY date), 0) - 1 AS kospi_return_20d
+            FROM market_index WHERE ticker = '1001'
+        )
         SELECT date,
-               close / NULLIF(LAG(close,20) OVER (ORDER BY date), 0) - 1 AS kospi_return_20d,
-               close / NULLIF(LAG(close,5)  OVER (ORDER BY date), 0) - 1 AS kospi_ret_5d,
+               kospi_return_20d,
+               kospi_return_5d,
                CASE WHEN close >= AVG(close) OVER (ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
-                    THEN 1 ELSE 0 END                                      AS kospi_above_ma60
-        FROM market_index
-        WHERE ticker = '1001'
+                    THEN 1 ELSE 0 END                                          AS kospi_above_ma60,
+               STDDEV_POP(daily_ret) OVER (ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)
+                   * SQRT(252)                                                 AS market_volatility_20d
+        FROM kospi_ret
         ORDER BY date
     """).df()
 
@@ -286,10 +357,14 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
         how="left",
     ).drop(columns=["date"], errors="ignore")
 
-    # --- 상대강도 = 종목 5일 수익률 - KOSPI 5일 수익률 ---
-    if "stock_ret_5d" in df.columns and "kospi_ret_5d" in df.columns:
-        df["relative_strength_5d"] = df["stock_ret_5d"] - df["kospi_ret_5d"]
-        df = df.drop(columns=["stock_ret_5d", "kospi_ret_5d"])
+    # --- 파생 피처 ---
+    # 상대강도 = 종목 5일 수익률 - KOSPI 5일 수익률
+    if "stock_ret_5d" in df.columns and "kospi_return_5d" in df.columns:
+        df["relative_strength_5d"] = df["stock_ret_5d"] - df["kospi_return_5d"]
+        df = df.drop(columns=["stock_ret_5d"])  # kospi_return_5d는 독립 피처로 유지
+    # 외국인+기관 합산 5일 수급
+    if "foreign_net_5d" in df.columns and "inst_net_5d" in df.columns:
+        df["combined_net_5d"] = df["foreign_net_5d"] + df["inst_net_5d"]
 
     # --- 유동성 필터 (NULL은 필터 통과, 실값이 있을 때만 임계값 적용) ---
     before = len(df)
