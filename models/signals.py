@@ -48,6 +48,8 @@ class BuySignal:
     risk_reward: float      # 손익비
     pattern_score: int = 0  # PatternLearningResult 보너스 점수 (0/1/3)
     xgb_prob: Optional[float] = None  # ML 매수 확률 (label_3d_5pct)
+    market: str = ""               # "KOSPI" | "KOSDAQ"
+    mktcap_rank: Optional[int] = None  # 시장 내 시총 순위
 
 
 @dataclass

@@ -9,7 +9,6 @@ from models.signals import BuySignal, MarketContext, PatternLearningResult, Sell
 logger = logging.getLogger(__name__)
 
 _MARKET_EMOJI = {"bull": "✅", "sideways": "⚠️", "bear": "❌"}
-_GRADE_EMOJI = {"S": "⭐⭐⭐", "A": "⭐⭐", "B": "⭐"}
 _ACTION_EMOJI = {
     "stop_loss": "🚨",
     "full_sell": "🔴",
@@ -23,6 +22,7 @@ _ACTION_LABEL = {
     "hold": "보유 유지",
 }
 _PATTERN_GRADE_EMOJI = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}
+_PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
 
 
 class ReportAgent:
@@ -98,16 +98,13 @@ def _build_message(
     if sell_signals:
         parts.append(_sell_section(sell_signals))
 
-    # ① 3일내 +3% 이상 상승 예측 종목 요약
-    if buy_signals:
-        parts.append(_prediction_summary_section(buy_signals))
-    else:
-        parts.append("📭 <b>오늘 상승 예측 종목 없음</b>")
-
-    # ③ 상승 예측 종목 상세 정보 (패턴분석 포함)
     if buy_signals:
         pr_by_ticker = {pr.ticker: pr for pr in (pattern_results or [])}
-        parts.append(_buy_detail_section(buy_signals, pr_by_ticker))
+        sorted_signals = _sort_signals(buy_signals, pr_by_ticker)
+        parts.append(_prediction_summary_section(sorted_signals))
+        parts.append(_buy_detail_section(sorted_signals, pr_by_ticker))
+    else:
+        parts.append("📭 <b>오늘 상승 예측 종목 없음</b>")
 
     return "\n\n".join(parts)
 
@@ -115,7 +112,7 @@ def _build_message(
 def _header() -> str:
     from datetime import date
     today = date.today().strftime("%Y-%m-%d")
-    return f"📈 <b>주식 신호 알림 — {today}</b>\n  전일 종가 기준 | KST 08:00"
+    return f"📈 <b>주식 신호 알림 — {today}</b>\n  전일 종가 기준 | KST 06:00"
 
 
 def _market_section(markets: dict[str, MarketContext]) -> str:
@@ -162,16 +159,35 @@ def _all_stocks_section(
     return "\n".join(lines)
 
 
-def _prediction_summary_section(signals: list[BuySignal]) -> str:
-    grade_order = {"S": 0, "A": 1, "B": 2}
-    sorted_signals = sorted(signals, key=lambda s: (grade_order.get(s.grade, 9), -s.total_score))
+def _market_badge(s: BuySignal) -> str:
+    if not s.market:
+        return ""
+    rank_str = f" {s.mktcap_rank}위" if s.mktcap_rank else ""
+    return f"[{s.market}{rank_str}]"
 
-    count = len(sorted_signals)
-    lines = [f"🎯 <b>3일내 +3% 이상 상승 예측 종목 ({count}종목)</b>"]
-    for s in sorted_signals:
-        em = _GRADE_EMOJI.get(s.grade, "")
+
+def _sort_signals(
+    signals: list[BuySignal],
+    pr_by_ticker: dict[str, PatternLearningResult],
+) -> list[BuySignal]:
+    """패턴등급 → ML확률 → 목표상승률 내림차순 정렬."""
+    def _key(s: BuySignal):
+        pr = pr_by_ticker.get(s.ticker)
+        pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
+        ml = -(s.xgb_prob or 0.0)
+        upside = -((s.target_price - s.current_price) / s.current_price) if s.current_price > 0 else 0
+        return (pg, ml, upside)
+    return sorted(signals, key=_key)
+
+
+def _prediction_summary_section(signals: list[BuySignal]) -> str:
+    count = len(signals)
+    lines = [f"🎯 <b>S등급 종목 — 기술·거래량 신호 ({count}종목)</b>"]
+    for s in signals:
+        badge = _market_badge(s)
+        prefix = f"{badge} " if badge else ""
         upside = round((s.target_price / s.current_price - 1) * 100, 1) if s.current_price > 0 else 0
-        lines.append(f"{em} [{s.grade}급] <b>{s.name}</b> ({s.ticker}) — 목표 +{upside}%")
+        lines.append(f"{prefix}[{s.grade}급] <b>{s.name}</b> ({s.ticker}) — 목표 +{upside}%")
     return "\n".join(lines)
 
 
@@ -179,16 +195,14 @@ def _buy_detail_section(
     signals: list[BuySignal],
     pr_by_ticker: dict[str, PatternLearningResult],
 ) -> str:
-    grade_order = {"S": 0, "A": 1, "B": 2}
-    sorted_signals = sorted(signals, key=lambda s: (grade_order.get(s.grade, 9), -s.total_score))
-
     lines = ["📊 <b>상승예측 종목 상세</b>"]
-    for s in sorted_signals:
-        em = _GRADE_EMOJI.get(s.grade, "")
+    for s in signals:
+        badge = _market_badge(s)
+        badge_str = f"  {badge}" if badge else ""
         pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
         pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
         entry = (
-            f"\n{em} <b>[{s.grade}급] {s.name} ({s.ticker})</b>\n"
+            f"\n<b>[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
             f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
             f"  현재가: {s.current_price:,.0f}원\n"
             f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"

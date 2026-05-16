@@ -12,7 +12,7 @@
 
 ## 기본 원칙
 - `docs/checkpoint.md` = 최신 상태 요약본
-- `docs/work-log.md` = 누적 작업 로그
+- `docs/work-log-YYYY-MM.md` = 월별 누적 작업 로그 (예: `docs/work-log-2026-05.md`)
 
 ## 할 일
 1. 현재 작업 맥락과 최근 변경 내용을 검토한다.
@@ -62,15 +62,17 @@
 - 이미 해결되어 더 이상 중요하지 않은 내용은 제거한다.
 - 한 번 훑어서 바로 이해할 수 있는 형태를 유지한다.
 - 파일이 없으면 위 구조로 새로 만든다.
+- **Done 섹션은 최대 5개**만 유지한다. 초과 항목은 삭제하거나 work-log에 기록 후 제거한다.
 
-## `docs/work-log.md` 규칙
-- 상세 기록이나 누적 기록은 여기에 남긴다.
+## `docs/work-log-YYYY-MM.md` 규칙
+- 현재 달의 파일에 새 세션을 **맨 위**에 추가한다 (최신이 위).
+- 파일이 없으면 `docs/work-log-YYYY-MM.md`로 새로 만들고 `docs/work-log.md` 인덱스에 링크를 추가한다.
 - 꼭 필요한 경우에만 짧게 append 한다.
 - 길고 장황한 일지는 피하고, 실제로 도움이 되는 정보만 남긴다.
 
-## `docs/work-log.md` 권장 형식
+## `docs/work-log-YYYY-MM.md` 권장 형식
 
-## YYYY-MM-DD HH:mm
+## YYYY-MM-DD 세션 N — 한 줄 요약
 - 작업:
 - 변경 사항:
 - 관련 파일:

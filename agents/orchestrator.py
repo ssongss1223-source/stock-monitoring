@@ -148,6 +148,13 @@ class Orchestrator:
                 logger.exception("XGBoost 추론 실패 — xgb_prob 없이 계속")
             _save_signal_history(buy_signals)
 
+        # ── 4b. market / 시총 순위 세팅 ──────────────────────────────────────
+        ticker_market = {t: m for t, m in universe}
+        mktcap_rank = _get_mktcap_rank()
+        for s in buy_signals:
+            s.market = ticker_market.get(s.ticker, "")
+            s.mktcap_rank = mktcap_rank.get(s.ticker)
+
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
         s_grade_signals = [s for s in buy_signals if s.grade == "S"]
@@ -207,6 +214,23 @@ class Orchestrator:
                 pattern_result=pattern_result,
             )
             return ticker, name, buy_signal, pattern_result
+
+
+def _get_mktcap_rank() -> dict[str, int]:
+    """코스피/코스닥 시총 순위 조회. 실패 시 빈 dict 반환."""
+    try:
+        today = date.today().strftime("%Y%m%d")
+        result: dict[str, int] = {}
+        for market in ("KOSPI", "KOSDAQ"):
+            df = stock.get_market_cap_by_ticker(today, market=market)
+            if df is not None and not df.empty:
+                df = df.sort_values("시가총액", ascending=False)
+                for rank, ticker in enumerate(df.index, 1):
+                    result[ticker] = rank
+        return result
+    except Exception:
+        logger.warning("시총 순위 조회 실패")
+        return {}
 
 
 def _save_signal_history(signals: list[BuySignal]) -> None:
