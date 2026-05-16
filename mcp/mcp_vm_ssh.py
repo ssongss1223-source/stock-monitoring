@@ -1,6 +1,8 @@
 """VM SSH MCP server — GCP VM 명령 실행 전용."""
 import asyncio
 import json
+import os
+import shutil
 from pathlib import Path
 
 import mcp.server.stdio
@@ -14,12 +16,23 @@ VM_APP_DIR = "/opt/stock-monitor"
 server = Server("vm-ssh")
 
 
+def _gcloud_bin() -> str:
+    # Windows에서는 gcloud.cmd를 우선 탐색
+    for candidate in ("gcloud.cmd", "gcloud"):
+        path = shutil.which(candidate)
+        if path:
+            return path
+    return "gcloud.cmd"
+
+
 async def _gcloud_ssh(command: str, timeout: int = 60) -> str:
-    cmd = f'gcloud compute ssh {VM_INSTANCE} --zone={VM_ZONE} --command="{command}"'
+    gcloud = _gcloud_bin()
+    cmd = f'"{gcloud}" compute ssh {VM_INSTANCE} --zone={VM_ZONE} --quiet --command="{command}"'
     proc = await asyncio.create_subprocess_shell(
         cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        env=os.environ.copy(),
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
