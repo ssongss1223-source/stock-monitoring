@@ -170,14 +170,14 @@ def _sort_signals(
     signals: list[BuySignal],
     pr_by_ticker: dict[str, PatternLearningResult],
 ) -> list[BuySignal]:
-    """패턴등급 → ML확률 → 목표상승률 내림차순 정렬."""
+    """ML확률 → 패턴등급 → 손익비 내림차순 정렬, 상위 10종목 cap."""
     def _key(s: BuySignal):
+        ml = -(s.xgb_prob or 0.0)
         pr = pr_by_ticker.get(s.ticker)
         pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
-        ml = -(s.xgb_prob or 0.0)
-        upside = -((s.target_price - s.current_price) / s.current_price) if s.current_price > 0 else 0
-        return (pg, ml, upside)
-    return sorted(signals, key=_key)
+        rr = -s.risk_reward
+        return (ml, pg, rr)
+    return sorted(signals, key=_key)[:10]
 
 
 def _prediction_summary_section(signals: list[BuySignal]) -> str:

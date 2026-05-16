@@ -165,8 +165,8 @@ class Orchestrator:
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
-        s_grade_signals = [s for s in buy_signals if s.grade == "S"]
-        logger.info("텔레그램 발송: S등급 %d종목 (전체 매수신호 %d종목)", len(s_grade_signals), len(buy_signals))
+        s_grade_signals = [s for s in buy_signals if s.grade == "S" and s.risk_reward >= 2.0]
+        logger.info("텔레그램 발송: S등급(RR≥2.0) %d종목 → top10 cap (전체 매수신호 %d종목)", len(s_grade_signals), len(buy_signals))
         await self.report_agent.send(markets, s_grade_signals, sell_signals, pattern_results, all_analyzed)
 
     async def _analyze_stock(
