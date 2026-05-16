@@ -2,6 +2,71 @@
 
 ---
 
+## 2026-05-16 세션 35 — Soft Voting 전환 + VM 배포
+- 작업: ML inference를 model_meta.json 단일모델 선택 → XGB+LGBM+ET 상시 soft voting으로 전환, VM 배포
+- 변경 사항:
+  - `agents/ml_scorer.py`: `_load_model_meta()`, `_predict_lr_stack()`, `_META_PATH`, `import json` 제거. `score_all_labels()` 단순화 — 항상 3개 모델 평균 (soft voting)
+  - VM (`instance-20260505-092414`): git pull + stock-monitor.service 재시작 완료
+- 관련 파일: `agents/ml_scorer.py`
+- 메모:
+  - model_meta.json이 best single model만 사용하는 문제 → 앙상블 전체 활용 안됨
+  - soft voting으로 바꾸면 코드 단순화 + 앙상블 효과 항상 적용
+  - LR stacker 파일(lr_stacker_*.pkl)은 존재하지만 더이상 inference에서 사용 안 함 (데이터 적을 때 오히려 노이즈)
+- 다음 아이디어: 22:00 UTC 실행 후 signal_xgb_probs 분포 확인
+
+---
+
+## 2026-05-16 세션 34 — CatBoost → ExtraTrees + LR Stacking 구현
+- 작업: ML 앙상블 3번째 모델 교체 (CatBoost → ExtraTrees), OOF 기반 LR Stacking 추가, 재학습 파이프라인 실행
+- 변경 사항:
+  - `scripts/train_models.py`: CatBoost 제거 → ExtraTrees (`_ET_PARAMS`, `_et_cv`, `_et_final`), LR Stacking 추가 (TimeSeriesSplit OOF → `lr_stacker_{label}.pkl`, base_keys dict 저장)
+  - `agents/ml_scorer.py`: `.cbm` 핸들러 → `.pkl` 핸들러, `_predict_lr_stack()` 신규 (base_keys dict 로드), `score_all_labels()` "lr" 분기 추가
+  - `run_ml_pipeline.ps1`: catboost pip install → scikit-learn, `chcp 65001` + OutputEncoding 추가 (콘솔 한글 깨짐 수정)
+- 관련 파일: `scripts/train_models.py`, `agents/ml_scorer.py`, `run_ml_pipeline.ps1`
+- 메모:
+  - ExtraTrees 선택: XGB+LGBM 모두 gradient boosting → 상관관계 높음. ET는 random feature/threshold → 앙상블 다양성 극대화
+  - LR Stacking: OOF TimeSeriesSplit 5-fold로 meta-learner 훈련 → leakage 없음. `{"model": lr, "base_keys": [...]}` dict 저장으로 인퍼런스 시 base 모델 자동 조합
+  - model_meta.json "best" == "lr" → 3개 base 모델 예측 → LR 통과. 실패 시 soft voting fallback
+  - 재학습 백그라운드 실행 중 (`data/train_log.txt`)
+- 다음 아이디어: 재학습 완료 후 model_meta.json 확인 → 텔레그램 필터 코드 반영
+
+---
+
+## 2026-05-16 세션 33 — CatBoost 확률 압축 버그 진단 + 텔레그램 리포트 형식 검토
+- 작업: VM 로그 확인, signal_xgb_probs 분포 진단, 텔레그램 리포트 테스트, ML 아키텍처 검토
+- 변경 사항:
+  - `agents/ml_scorer.py`: CatBoost `fillna(0)` → NaN 자체 처리로 수정 (근본 원인은 아니었으나 코드 정확도 개선)
+  - `data/model_meta.json`: CatBoost 4개 라벨 교체 (3d_5pct→xgb, 10d_3/5/10pct→lgbm), VM 배포 완료
+- 관련 파일: `agents/ml_scorer.py`, `data/model_meta.json`
+- 메모:
+  - signal_xgb_probs: 0건 정상 (5/15 실행은 배포 전 구버전 코드, 5/16 22:00 UTC가 v2 첫 추론)
+  - CatBoost 확률 압축: training 시 Prec@20=90%지만 inference에서 0.500~0.524로 수렴. ranking 자체는 맞을 수 있으나 절대값이 무의미 → model_meta에서 교체
+  - 목표가 %: 기술적 저항선 기반 (없으면 일괄 +10%), ML과 무관
+  - 현재 필터: S등급 전체 발송 (21종목) — risk_reward/max N 코드 미반영
+  - 스케줄 오기 수정: 분석은 21:00 UTC가 아닌 22:00 UTC (다음 실행 2026-05-16 22:00)
+- 다음 아이디어:
+  - CatBoost → ExtraTrees 대체 (3-model 유지, calibration 안정)
+  - 또는 XGB + LGBM + LR stacking (OOF 기반)
+  - 텔레그램 필터(risk_reward ≥ 2.0, top 10) 코드 반영
+
+---
+
+## 2026-05-16 세션 32 — v2 첫 재학습 + VM 배포 완료
+- 작업: VM DB 복사 → labeler → feature_engineering → train_models → VM 배포
+- 변경 사항:
+  - `agents/ml_scorer.py`: `total_score` 누락 버그 수정 (추론 시 KeyError 방지)
+  - `scripts/train_models.py`: lightgbm 미설치 시 em dash 인코딩 오류 수정 (cp949)
+  - `run_ml_pipeline.ps1` 신규: 원클릭 재학습·배포 스크립트
+- 관련 파일: `agents/ml_scorer.py`, `scripts/train_models.py`, `run_ml_pipeline.ps1`
+- 메모:
+  - 피처 수: 55개 (체크포인트 "27개" 오기였음 — v1 28 + v2 27 = 55)
+  - 학습 결과: CatBoost가 10일 구간 강세, XGB/LGBM은 단기 강세
+  - VM 배포 시 `stock` 유저 권한 문제 → `chmod 777` 우회 적용 (다음 배포 시 `chown` 정리 필요)
+  - DB 마이그레이션은 서비스 중지 후 실행해야 함 (DuckDB 락 충돌)
+- 다음 아이디어: 내일 VM 로그 확인 → signal_xgb_probs 분포 → threshold 결정
+
+---
+
 ## 2026-05-16 세션 31 — 멀티모델 + 피처 v2 확장 완성
 - 작업: 9-label 멀티모델 학습 파이프라인 + 피처 27개 확장 + 라이브 추론 동기화
 - 변경 사항:
