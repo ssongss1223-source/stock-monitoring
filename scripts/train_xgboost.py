@@ -20,6 +20,9 @@ _TARGETS = [
     "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
     "label_5d_3pct", "label_5d_5pct", "label_5d_10pct",
     "label_10d_3pct", "label_10d_5pct", "label_10d_10pct",
+    "label_3d_3pct_c2", "label_3d_5pct_c2",
+    "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
+    "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
 ]
 
 # 피처에서 제외 (미래 데이터 / 식별자 / 절대 가격)
@@ -28,6 +31,9 @@ _DROP = {
     "max_close_3d", "max_close_5d", "max_close_10d",
     "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
     "return_3d", "return_5d", "return_10d",
+    "c2_3d_3pct", "c2_3d_5pct",
+    "c2_5d_3pct", "c2_5d_5pct", "c2_5d_10pct",
+    "c2_10d_3pct", "c2_10d_5pct", "c2_10d_10pct",
 }
 
 _XGB_PARAMS = dict(

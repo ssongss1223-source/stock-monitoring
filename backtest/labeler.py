@@ -25,11 +25,15 @@ logger = logging.getLogger(__name__)
 
 _HOLD_DAYS = [3, 5, 10]
 
+# c2: 해당 기간 내 종가가 목표 이상인 날 >= 2일 (3d_10pct 제외 — 달성률 2.9%)
+_C2_COMBOS = [(3, 3), (3, 5), (5, 3), (5, 5), (5, 10), (10, 3), (10, 5), (10, 10)]
+
 _LABEL_COLS = [
     "signal_date", "ticker", "entry_price",
     "max_close_3d", "max_close_5d", "max_close_10d",
     "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
     "return_3d", "return_5d", "return_10d",
+    *[f"c2_{d}d_{p}pct" for d, p in _C2_COMBOS],
 ]
 
 
@@ -65,6 +69,11 @@ def label_one(df_daily: pd.DataFrame, signal_date: str | date) -> dict | None:
         result[f"max_close_{d}d"] = max_close
         result[f"max_drawdown_{d}d"] = (min_low - entry_price) / entry_price
         result[f"return_{d}d"] = (close_n - entry_price) / entry_price
+
+    for d, pct in _C2_COMBOS:
+        w = window.iloc[:d]
+        threshold = entry_price * (1 + pct / 100)
+        result[f"c2_{d}d_{pct}pct"] = int((w["Close"] >= threshold).sum())
 
     return result
 

@@ -87,6 +87,14 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
     return_3d        DOUBLE,
     return_5d        DOUBLE,
     return_10d       DOUBLE,
+    c2_3d_3pct       INT,
+    c2_3d_5pct       INT,
+    c2_5d_3pct       INT,
+    c2_5d_5pct       INT,
+    c2_5d_10pct      INT,
+    c2_10d_3pct      INT,
+    c2_10d_5pct      INT,
+    c2_10d_10pct     INT,
     PRIMARY KEY (signal_date, ticker)
 );
 
@@ -126,6 +134,14 @@ ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_volume    BIGINT;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_ratio     DOUBLE;
 ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS scoring_version VARCHAR;
 ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS xgb_prob DOUBLE;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_3d_3pct   INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_3d_5pct   INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_3pct   INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_5pct   INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_10pct  INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_3pct  INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_5pct  INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_10pct INT;
 """
 
 

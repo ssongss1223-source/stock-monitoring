@@ -410,6 +410,13 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
                 df[f"max_close_{d}d"] >= df["entry_price"] * (1 + pct / 100)
             ).astype(int)
 
+    # --- c2 라벨 8개 (3d_10pct 제외 — 달성률 2.9%) ---
+    _C2_COMBOS = [(3, 3), (3, 5), (5, 3), (5, 5), (5, 10), (10, 3), (10, 5), (10, 10)]
+    for d, pct in _C2_COMBOS:
+        col = f"c2_{d}d_{pct}pct"
+        if col in df.columns:
+            df[f"label_{d}d_{pct}pct_c2"] = (df[col] >= 2).astype(int)
+
     return df
 
 

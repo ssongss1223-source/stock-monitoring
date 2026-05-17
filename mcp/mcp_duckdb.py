@@ -1,6 +1,5 @@
 """DuckDB MCP server — stock.duckdb 전용, SELECT 전용."""
 import asyncio
-import json
 from pathlib import Path
 
 import duckdb
@@ -13,8 +12,9 @@ DB_PATH = Path(__file__).parent.parent / "data" / "stock.duckdb"
 server = Server("stock-db")
 
 
-def _conn():
-    return duckdb.connect(str(DB_PATH), read_only=True)
+def _query(sql: str) -> str:
+    with duckdb.connect(str(DB_PATH), read_only=True) as conn:
+        return conn.execute(sql).fetchdf().to_string(index=False, max_rows=200)
 
 
 @server.list_tools()
@@ -25,9 +25,7 @@ async def list_tools() -> list[types.Tool]:
             description="stock.duckdb에 SELECT 쿼리 실행. 쓰기 쿼리(INSERT/UPDATE/DELETE/DROP 등)는 거부됨.",
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "sql": {"type": "string", "description": "실행할 SELECT SQL"}
-                },
+                "properties": {"sql": {"type": "string", "description": "실행할 SELECT SQL"}},
                 "required": ["sql"],
             },
         ),
@@ -41,9 +39,7 @@ async def list_tools() -> list[types.Tool]:
             description="특정 테이블의 컬럼명/타입/NULL여부 반환.",
             inputSchema={
                 "type": "object",
-                "properties": {
-                    "table": {"type": "string", "description": "테이블 이름"}
-                },
+                "properties": {"table": {"type": "string", "description": "테이블 이름"}},
                 "required": ["table"],
             },
         ),
@@ -52,45 +48,38 @@ async def list_tools() -> list[types.Tool]:
 
 @server.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    def respond(text: str) -> list[types.TextContent]:
+        return [types.TextContent(type="text", text=text)]
+
     if name == "read_query":
         sql = arguments["sql"].strip()
-        # 쓰기 쿼리 차단 (간단한 키워드 체크)
         first_word = sql.split()[0].upper() if sql else ""
         if first_word not in ("SELECT", "WITH", "SHOW", "DESCRIBE", "PRAGMA"):
-            return [types.TextContent(type="text", text="ERROR: SELECT 전용 서버입니다. 쓰기 쿼리는 허용되지 않습니다.")]
+            return respond("ERROR: SELECT 전용 서버입니다.")
         try:
-            conn = _conn()
-            result = conn.execute(sql).fetchdf()
-            conn.close()
-            return [types.TextContent(type="text", text=result.to_string(index=False, max_rows=200))]
+            return respond(_query(sql))
         except Exception as e:
-            return [types.TextContent(type="text", text=f"ERROR: {e}")]
+            return respond(f"ERROR: {e}")
 
     elif name == "list_tables":
         try:
-            conn = _conn()
-            tables = conn.execute("SHOW TABLES").fetchdf()
-            out = []
-            for table in tables["name"].tolist():
-                cols = conn.execute(f"DESCRIBE {table}").fetchdf()
-                col_names = ", ".join(cols["column_name"].tolist())
-                out.append(f"{table}: {col_names}")
-            conn.close()
-            return [types.TextContent(type="text", text="\n".join(out))]
+            with duckdb.connect(str(DB_PATH), read_only=True) as conn:
+                tables = conn.execute("SHOW TABLES").fetchdf()["name"].tolist()
+                out = []
+                for t in tables:
+                    cols = conn.execute(f"DESCRIBE {t}").fetchdf()
+                    out.append(f"{t}: {', '.join(cols['column_name'].tolist())}")
+            return respond("\n".join(out))
         except Exception as e:
-            return [types.TextContent(type="text", text=f"ERROR: {e}")]
+            return respond(f"ERROR: {e}")
 
     elif name == "describe_table":
-        table = arguments["table"]
         try:
-            conn = _conn()
-            result = conn.execute(f"DESCRIBE {table}").fetchdf()
-            conn.close()
-            return [types.TextContent(type="text", text=result.to_string(index=False))]
+            return respond(_query(f"DESCRIBE {arguments['table']}"))
         except Exception as e:
-            return [types.TextContent(type="text", text=f"ERROR: {e}")]
+            return respond(f"ERROR: {e}")
 
-    return [types.TextContent(type="text", text=f"ERROR: 알 수 없는 tool: {name}")]
+    return respond(f"ERROR: 알 수 없는 tool: {name}")
 
 
 async def main():

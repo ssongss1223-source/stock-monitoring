@@ -1,5 +1,17 @@
 {
   "plansDirectory": ".claude/plans",
+  "permissions": {
+    "allow": [
+      "mcp__stock-db__read_query",
+      "mcp__stock-db__describe_table",
+      "mcp__stock-db__list_tables",
+      "mcp__vm-ssh__ssh_run",
+      "mcp__vm-ssh__service_status",
+      "mcp__vm-ssh__service_restart",
+      "mcp__vm-ssh__tail_log",
+      "mcp__telegram__send_message"
+    ]
+  },
   "hooks": {
     "Stop": [
       {
