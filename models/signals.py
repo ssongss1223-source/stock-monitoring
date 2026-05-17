@@ -53,6 +53,7 @@ class BuySignal:
     target_is_resistance: bool = False    # True=저항선 기반, False=+10% 폴백
     market: str = ""               # "KOSPI" | "KOSDAQ"
     mktcap_rank: Optional[int] = None  # 시장 내 시총 순위
+    label_probs: dict = field(default_factory=dict)  # {label: prob} 9개 전체
 
 
 @dataclass

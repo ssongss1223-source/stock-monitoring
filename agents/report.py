@@ -28,6 +28,10 @@ _LABEL_DISPLAY = {
     "10d_3pct": "10일+3%", "10d_5pct": "10일+5%", "10d_10pct": "10일+10%",
 }
 _PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
+_GAIN_PCT     = {"3pct": 0.03, "5pct": 0.05, "10pct": 0.10}
+_DAYS_MAP     = {"3d": 3, "5d": 5, "10d": 10}
+_SHORT_LABELS = ["3d_3pct", "3d_5pct", "3d_10pct", "5d_3pct", "5d_5pct", "5d_10pct"]
+_SWING_LABELS = ["10d_3pct", "10d_5pct", "10d_10pct"]
 
 
 class ReportAgent:
@@ -107,9 +111,9 @@ def _build_message(
 
     if buy_signals:
         pr_by_ticker = {pr.ticker: pr for pr in (pattern_results or [])}
-        sorted_signals = _sort_signals(buy_signals, pr_by_ticker)
-        parts.append(_prediction_summary_section(sorted_signals))
-        parts.append(_buy_detail_section(sorted_signals, pr_by_ticker))
+        groups = _four_groups(buy_signals)
+        parts.append(_prediction_summary_section(*groups))
+        parts.append(_buy_detail_section(*groups, pr_by_ticker))
     else:
         parts.append("📭 <b>오늘 상승 예측 종목 없음</b>")
 
@@ -173,15 +177,57 @@ def _market_badge(s: BuySignal) -> str:
     return f"[{s.market}{rank_str}]"
 
 
-def _label_tiebreak(label: str | None) -> tuple[int, int]:
-    """ML 동점 tiebreaker: days 짧을수록, % 높을수록 우선. (days, -pct)."""
-    if not label:
-        return (999, 0)
-    try:
-        d, p = label.split("_")
-        return (int(d.replace("d", "")), -int(p.replace("pct", "")))
-    except Exception:
-        return (999, 0)
+def _loss_pct(s: BuySignal) -> float:
+    if s.current_price > 0 and s.stop_loss > 0:
+        return (s.current_price - s.stop_loss) / s.current_price
+    return 0.03
+
+
+def _ev_per_day(label: str, prob: float, loss: float) -> float:
+    d_str, p_str = label.split("_")
+    ev = prob * _GAIN_PCT[p_str] - (1 - prob) * loss
+    return ev / _DAYS_MAP[d_str]
+
+
+def _four_groups(
+    signals: list[BuySignal],
+) -> tuple[
+    list[tuple[BuySignal, float, str]],
+    list[tuple[BuySignal, float, str]],
+    list[tuple[BuySignal, float, str]],
+    list[tuple[BuySignal, float, str]],
+]:
+    """9라벨 × 전체 종목 케이스에서 그룹별 EV/day 상위 3개 추출.
+    종목당 그룹 내 EV 최대 라벨만 유지 (같은 종목 중복 방지)."""
+    # buckets: {group_key: {ticker: (signal, ev, label)}}
+    buckets: dict[str, dict[str, tuple[BuySignal, float, str]]] = {
+        "ls": {}, "lw": {}, "ss": {}, "sw": {},
+    }
+    for s in signals:
+        loss = _loss_pct(s)
+        g_prefix = "l" if _is_large_cap(s) else "s"
+        for label in _SHORT_LABELS + _SWING_LABELS:
+            g_key = g_prefix + ("s" if label in _SHORT_LABELS else "w")
+            if s.label_probs:
+                prob = s.label_probs.get(label, 0.0)
+            elif s.best_label == label and s.xgb_prob is not None:
+                prob = s.xgb_prob
+            else:
+                continue
+            if prob <= 0:
+                continue
+            ev = _ev_per_day(label, prob, loss)
+            cur = buckets[g_key].get(s.ticker)
+            if cur is None or ev > cur[1]:
+                buckets[g_key][s.ticker] = (s, ev, label)
+
+    sort_key = lambda x: (-x[1], -(x[0].xgb_prob or 0))
+    return (
+        sorted(buckets["ls"].values(), key=sort_key)[:3],
+        sorted(buckets["lw"].values(), key=sort_key)[:3],
+        sorted(buckets["ss"].values(), key=sort_key)[:3],
+        sorted(buckets["sw"].values(), key=sort_key)[:3],
+    )
 
 
 def _is_large_cap(s: BuySignal) -> bool:
@@ -210,24 +256,35 @@ def _sort_signals(
     return sorted(signals, key=_key)[:10]
 
 
-def _prediction_summary_section(signals: list[BuySignal]) -> str:
-    count = len(signals)
-    lines = [f"🎯 <b>S등급 종목 — 기술·거래량 신호 ({count}종목)</b>"]
-    for s in signals:
-        badge = _market_badge(s)
-        prefix = f"{badge} " if badge else ""
-        if s.target_is_resistance and s.current_price > 0:
-            upside = round((s.target_price / s.current_price - 1) * 100, 1)
-            target_str = f" — 목표 +{upside}%"
-        else:
-            target_str = ""
-        lines.append(f"{prefix}[{s.grade}급] <b>{s.name}</b> ({s.ticker}){target_str}")
+def _prediction_summary_section(
+    large_short: list[tuple[BuySignal, float, str]],
+    large_swing: list[tuple[BuySignal, float, str]],
+    small_short: list[tuple[BuySignal, float, str]],
+    small_swing: list[tuple[BuySignal, float, str]],
+) -> str:
+    total = len(large_short) + len(large_swing) + len(small_short) + len(small_swing)
+    lines = [f"🎯 <b>S등급 종목 — 기술·거래량 신호 ({total}종목)</b>"]
+
+    def _section(group: list[tuple[BuySignal, float, str]], header: str) -> None:
+        if not group:
+            return
+        lines.append(f"\n{header}")
+        for s, _, _ in group:
+            badge = _market_badge(s)
+            prefix = f"{badge} " if badge else ""
+            lines.append(f"{prefix}[{s.grade}급] <b>{s.name}</b> ({s.ticker})")
+
+    _section(large_short, "🏆 <b>대형주 단기상승</b>")
+    _section(large_swing,  "🏆 <b>대형주 스윙상승</b>")
+    _section(small_short, "📈 <b>중소형주 단기상승</b>")
+    _section(small_swing,  "📈 <b>중소형주 스윙상승</b>")
     return "\n".join(lines)
 
 
 def _stock_entry(
     s: BuySignal,
-    pr_by_ticker: dict[str, PatternLearningResult],
+    pr: Optional[PatternLearningResult],
+    group_label: str,
 ) -> str:
     badge = _market_badge(s)
     badge_str = f"  {badge}" if badge else ""
@@ -239,10 +296,12 @@ def _stock_entry(
         if s.target_is_resistance
         else f"  참고 손절: {s.stop_loss:,.0f}원\n"
     )
+    prob = s.label_probs.get(group_label) if s.label_probs else s.xgb_prob
     ml_line = ""
-    if s.xgb_prob is not None:
-        label_name = _LABEL_DISPLAY.get(s.best_label or "", s.best_label or "3일+5%")
-        ml_line = f"  ML({label_name}): {s.xgb_prob:.0%}\n"
+    if prob is not None:
+        label_name = _LABEL_DISPLAY.get(group_label, group_label)
+        ev_pct = _ev_per_day(group_label, prob, _loss_pct(s)) * 100
+        ml_line = f"  [{label_name}] EV: {ev_pct:.1f}%/일, ML: {prob:.0%}\n"
     entry = (
         f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
         + ml_line +
@@ -251,7 +310,6 @@ def _stock_entry(
         + target_line +
         f"  손익비: 약 1:{s.risk_reward}"
     )
-    pr = pr_by_ticker.get(s.ticker)
     if pr and pr.grade != "INSUFFICIENT":
         pr_em = _PATTERN_GRADE_EMOJI.get(pr.grade, "⚪")
         ret_str = f"+{pr.avg_return_5d:.1f}%" if pr.avg_return_5d >= 0 else f"{pr.avg_return_5d:.1f}%"
@@ -264,22 +322,25 @@ def _stock_entry(
 
 
 def _buy_detail_section(
-    signals: list[BuySignal],
+    large_short: list[tuple[BuySignal, float, str]],
+    large_swing: list[tuple[BuySignal, float, str]],
+    small_short: list[tuple[BuySignal, float, str]],
+    small_swing: list[tuple[BuySignal, float, str]],
     pr_by_ticker: dict[str, PatternLearningResult],
 ) -> str:
-    large = [s for s in signals if _is_large_cap(s)]
-    small = [s for s in signals if not _is_large_cap(s)]
-
     lines = ["📊 <b>상승예측 종목 상세</b>"]
-    if large:
-        lines.append(f"\n🏆 <b>대형주 (KOSPI 100위 / KOSDAQ 50위 이내, {len(large)}종목)</b>")
-        for s in large:
-            lines.append(_stock_entry(s, pr_by_ticker))
-    if small:
-        lines.append(f"\n📈 <b>중소형주 ({len(small)}종목)</b>")
-        for s in small:
-            lines.append(_stock_entry(s, pr_by_ticker))
 
+    def _section(group: list[tuple[BuySignal, float, str]], header: str) -> None:
+        if not group:
+            return
+        lines.append(f"\n{header}")
+        for s, _, lbl in group:
+            lines.append(_stock_entry(s, pr_by_ticker.get(s.ticker), lbl))
+
+    _section(large_short, "🏆 <b>대형주 단기상승</b>")
+    _section(large_swing,  "🏆 <b>대형주 스윙상승</b>")
+    _section(small_short, "📈 <b>중소형주 단기상승</b>")
+    _section(small_swing,  "📈 <b>중소형주 스윙상승</b>")
     return "\n".join(lines)
 
 

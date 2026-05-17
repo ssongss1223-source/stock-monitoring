@@ -65,12 +65,12 @@ class Orchestrator:
         finally:
             conn.close()
 
-        # 종목별 best_label
-        best_labels: dict[str, tuple[str, float]] = {}
+        # 종목별 label_probs (전체 9라벨) + best_label
+        all_label_probs: dict[str, dict[str, float]] = {}
         if not probs_df.empty:
             for ticker, group in probs_df.groupby("ticker"):
-                best_row = group.loc[group["xgb_prob"].idxmax()]
-                best_labels[str(ticker)] = (str(best_row["label"]), float(best_row["xgb_prob"]))
+                lp = {str(r["label"]): float(r["xgb_prob"]) for _, r in group.iterrows()}
+                all_label_probs[str(ticker)] = lp
 
         buy_signals: list[BuySignal] = []
         for _, row in df.iterrows():
@@ -81,9 +81,16 @@ class Orchestrator:
             rr = float(feat.get("risk_reward", 0))
             if rr < 2.0:
                 continue
+            ticker = str(row["ticker"])
+            lp = all_label_probs.get(ticker, {})
+            best_lbl = max(lp, key=lp.get) if lp else feat.get("best_label")
+            # DB xgb_prob 칼럼을 fallback으로 사용 (signal_xgb_probs가 비어있을 때)
+            import pandas as pd
+            db_prob = float(row["xgb_prob"]) if (row["xgb_prob"] is not None and pd.notna(row["xgb_prob"])) else None
+            best_prob = lp[best_lbl] if (lp and best_lbl) else db_prob
             s = BuySignal(
-                ticker=str(row["ticker"]),
-                name=_get_name(str(row["ticker"])),
+                ticker=ticker,
+                name=_get_name(ticker),
                 grade=str(row["grade"]),
                 total_score=int(feat.get("total_score", 0)),
                 trend_score=int(feat.get("trend_score", 0)),
@@ -97,16 +104,37 @@ class Orchestrator:
                 pattern_score=int(feat.get("pattern_score", 0)),
                 market=str(feat.get("market", "")),
                 mktcap_rank=feat.get("mktcap_rank"),
-                best_label=feat.get("best_label"),
-                xgb_prob=float(best_labels[str(row["ticker"])][1]) if str(row["ticker"]) in best_labels else None,
+                label_probs=lp,
+                best_label=best_lbl,
+                xgb_prob=best_prob,
             )
-            if str(row["ticker"]) in best_labels:
-                s.best_label = best_labels[str(row["ticker"])][0]
             buy_signals.append(s)
 
         if not buy_signals:
             logger.warning("재발송할 S등급(RR≥2.0) 신호 없음")
             return
+
+        # market/mktcap_rank: pykrx last trading day 기준으로 보정 (오늘 universe와 무관)
+        live_rank, live_market = _get_rank_and_market()
+        for s in buy_signals:
+            if not s.market:
+                s.market = live_market.get(s.ticker, "")
+            if s.mktcap_rank is None:
+                s.mktcap_rank = live_rank.get(s.ticker)
+
+        # label_probs 없으면 fresh ML 추론 (format test 용)
+        if not any(s.label_probs for s in buy_signals):
+            try:
+                fresh_probs = score_all_labels(buy_signals)
+                for s in buy_signals:
+                    lp = fresh_probs.get(s.ticker, {})
+                    if lp:
+                        s.label_probs = lp
+                        s.best_label = max(lp, key=lp.get)
+                        s.xgb_prob = lp[s.best_label]
+                logger.info("재발송 ML 추론 완료: %d종목", len(buy_signals))
+            except Exception:
+                logger.warning("재발송 ML 추론 실패 — xgb_prob 없이 계속")
 
         logger.info("재발송: %d종목 (signal_date=%s)", len(buy_signals), signal_date)
         await self.report_agent.send({}, buy_signals, [], None, None)
@@ -216,7 +244,14 @@ class Orchestrator:
             logger.warning("종목 분석 중 예외 %d건 발생 (개별 종목 건너뜀)", len(errs))
         logger.info("매수 신호: %d종목 (전체 %d종목 분석)", len(buy_signals), len(universe))
 
-        # ── 4. XGBoost 추론 + signal_history / signal_xgb_probs 저장 ──────────
+        # ── 4. market / 시총 순위 세팅 (저장 전에 먼저) ──────────────────────
+        ticker_market = {t: m for t, m in universe}
+        mktcap_rank = _get_mktcap_rank()
+        for s in buy_signals:
+            s.market = ticker_market.get(s.ticker, "")
+            s.mktcap_rank = mktcap_rank.get(s.ticker)
+
+        # ── 4b. XGBoost 추론 + signal_history / signal_xgb_probs 저장 ─────────
         if buy_signals:
             xgb_probs: dict[str, dict[str, float]] = {}
             try:
@@ -224,6 +259,7 @@ class Orchestrator:
                 for s in buy_signals:
                     label_probs = xgb_probs.get(s.ticker, {})
                     if label_probs:
+                        s.label_probs = label_probs
                         s.best_label = max(label_probs, key=label_probs.get)
                         s.xgb_prob = label_probs[s.best_label]
             except Exception:
@@ -231,13 +267,6 @@ class Orchestrator:
             _save_signal_history(buy_signals)
             if xgb_probs:
                 _save_signal_xgb_probs(xgb_probs)
-
-        # ── 4b. market / 시총 순위 세팅 ──────────────────────────────────────
-        ticker_market = {t: m for t, m in universe}
-        mktcap_rank = _get_mktcap_rank()
-        for s in buy_signals:
-            s.market = ticker_market.get(s.ticker, "")
-            s.mktcap_rank = mktcap_rank.get(s.ticker)
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
@@ -316,20 +345,36 @@ def _is_trading_day() -> bool:
 
 
 def _get_mktcap_rank() -> dict[str, int]:
-    """코스피/코스닥 시총 순위 조회. 실패 시 빈 dict 반환."""
+    rank, _ = _get_rank_and_market()
+    return rank
+
+
+def _get_rank_and_market() -> tuple[dict[str, int], dict[str, str]]:
+    """시총 순위 + 시장(KOSPI/KOSDAQ) 동시 반환. DB 최근 거래일 기준."""
     try:
-        today = date.today().strftime("%Y%m%d")
-        result: dict[str, int] = {}
-        for market in ("KOSPI", "KOSDAQ"):
-            df = stock.get_market_cap_by_ticker(today, market=market)
-            if df is not None and not df.empty:
-                df = df.sort_values("시가총액", ascending=False)
-                for rank, ticker in enumerate(df.index, 1):
-                    result[ticker] = rank
-        return result
+        conn = get_conn(read_only=True)
+        try:
+            row = conn.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()
+            trade_date = str(row[0]).replace("-", "") if row[0] else date.today().strftime("%Y%m%d")
+        finally:
+            conn.close()
+        rank_result: dict[str, int] = {}
+        market_result: dict[str, str] = {}
+        for mkt in ("KOSPI", "KOSDAQ"):
+            df = stock.get_market_cap_by_ticker(trade_date, market=mkt)
+            if df is None or df.empty:
+                continue
+            cap_col = next((c for c in ("시가총액", "Mktcap") if c in df.columns), None)
+            if cap_col is None:
+                continue
+            df = df.sort_values(cap_col, ascending=False)
+            for rank, ticker in enumerate(df.index, 1):
+                rank_result[ticker] = rank
+                market_result[ticker] = mkt
+        return rank_result, market_result
     except Exception:
         logger.warning("시총 순위 조회 실패")
-        return {}
+        return {}, {}
 
 
 def _save_signal_history(signals: list[BuySignal]) -> None:

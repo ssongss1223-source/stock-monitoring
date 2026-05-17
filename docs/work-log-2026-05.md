@@ -2,6 +2,78 @@
 
 ---
 
+## 2026-05-17 세션 41 — 텔레그램 EV/day 정렬 + 4그룹 리포트 구조 개편
+- 작업: 기대값(EV/day) 개념 도입, 텔레그램 리포트 대형주/중소형주 × 단기/스윙 4그룹 구조로 전면 개편
+- 변경 사항:
+  - `models/signals.py`: `BuySignal.label_probs` 필드 추가 (9개 라벨 확률 전체 보존)
+  - `agents/orchestrator.py`:
+    - `_pipeline`: market/mktcap_rank 세팅을 `_save_signal_history` 이전으로 이동 (순서 버그 수정)
+    - `_get_mktcap_rank`: 비거래일 오류 방지 → DB 최근 거래일 기준
+    - `_get_rank_and_market()` 추가: rank + market dict 동시 반환
+    - `run_resend_last`: label_probs 전체 복원, DB xgb_prob fallback, fresh ML 추론 추가
+  - `agents/report.py`:
+    - EV/day 산식: `(prob × gain% - (1-prob) × loss%) / days`
+    - `_four_groups()`: 9라벨 × 전체 종목 케이스에서 그룹별 EV 상위 3개 추출
+    - 4그룹: 대형주 단기/스윙, 중소형주 단기/스윙 top3씩 (총 12종목)
+    - 상세 ML 라인: `[3일+5%] EV: X.X%/일, ML: XX%` 형식
+    - 요약 섹션 목표수익률 제거
+- 관련 파일: `models/signals.py`, `agents/orchestrator.py`, `agents/report.py`
+- 메모:
+  - EV/day = 일일 기대수익률 (자본 효율 정규화). 3d+3% 라벨도 확률 높으면 10d+5% 보다 높을 수 있음
+  - 라벨 정의 개선 논의: max_high → max_close (기간 내 최고 종가). 재학습 필요, 보류
+  - `--resend-last` 로 로컬 포맷 테스트 가능
+- 다음 아이디어: VM 배포 후 정규 실행 검증, signal_xgb_probs 누적 확인, 사후 검증 자동화
+
+## 2026-05-17 세션 39 — 시장국면 로직 전면 개편 (매크로 + 변동성 추가)
+- 작업: 시장국면(bull/sideways/bear) 판단 변수 확장 및 데이터 소스 DB 전환
+- 변경 사항:
+  - `data/db.py`: `macro_daily` 테이블 DDL 추가
+  - `data/store.py`: `MacroStore` 클래스 신규 (yfinance 6종 수집: S&P500/NASDAQ/USDKRW/10Y/WTI/SOX → macro_daily)
+  - `agents/market_filter.py`:
+    - `_macro_flags()` 신규: sp500_above_20ma / usdkrw_below_ma20 / sox_uptrend (macro_daily DB 기반)
+    - `_rv_flag()` 신규: kospi_rv20_low — 20일 실현변동성 ≤ 20% (market_index DB 기반)
+    - `index_1m_uptrend` → `index_above_60ma` 교체 (노이즈 감소)
+    - `index_above_20ma` → `index_above_120ma` 교체 (장기 추세 위치)
+    - `_foreign_net_buy()`: pykrx(차단) → ohlcv_daily.foreign_net 전종목 합산 DB 전환
+  - `agents/orchestrator.py`: `MacroStore.fetch_and_update()` 수집 파이프라인 추가
+  - `config/scoring/v1_baseline/market.yaml`: 룰 6→10개, 임계값 max 9→13, bull≥10/sw≥7/bear≤6
+  - `docs/system.md`: 섹션 5 시장국면 판단 로직 신규 추가, 섹션 번호 재정렬
+- 관련 파일: `data/db.py`, `data/store.py`, `agents/market_filter.py`, `agents/orchestrator.py`, `config/scoring/v1_baseline/market.yaml`, `docs/system.md`
+- 메모:
+  - 현재 KOSPI 판정: SIDEWAYS 8/13 (외국인 순매도 + 원화 약세 + 고변동성)
+  - sector_strong_ratio_70pct 는 pykrx 차단으로 여전히 항상 False (+1 사실상 미작동)
+  - ticker_master.market 미구축 → foreign_net 시장 구분 없이 전종목 합산
+  - VM 미배포 상태 (다음 세션에서 배포 필요)
+- 다음 아이디어: VM 배포, signal_xgb_probs 데이터 확인, 신호 사후 검증 자동화
+
+## 2026-05-17 세션 38 — 리포트 형식 개선 + DB-only 분석 + MCP 확장
+- 작업: 파이프라인 속도 개선, 텔레그램 리포트 형식 전면 개선, MCP 서버 확장, Stop hook 구축
+- 변경 사항:
+  - `data/store.py`: `OhlcvStore.load_daily()`, `HourlyStore.load_hourly()` 추가 (DB read-only, 네트워크 없음)
+  - `agents/orchestrator.py`: `_analyze_stock()`에서 `fetch_and_update_*` → `load_*`로 교체 (73분 → 21분), 종목별 best_label 선택, `run_resend_last()` 신규, `_save_signal_history()` features JSON 확장
+  - `models/signals.py`: `BuySignal`에 `best_label`, `target_is_resistance` 필드 추가
+  - `agents/buy_signal.py`: `_calc_target()` → `(price, bool)` 튜플 반환 (저항선 기반 여부 구분)
+  - `agents/report.py`: ML 라인 상단 이동, `_label_tiebreak()` tiebreaker, `_is_large_cap()`, 대형주/중소형주 섹션 분리, ⭐ S등급 접두사, 폴백 목표가 숨김, `_LABEL_DISPLAY` 매핑
+  - `main.py`: `--resend-last` 플래그 추가
+  - `mcp/mcp_telegram.py`: 신규 (Telegram MCP 서버)
+  - `.mcp.json`: telegram 서버 추가 (stock-db + vm-ssh + telegram = 3개)
+  - `.claude/settings.json`: Stop hook 추가 (`scripts/auto_checkpoint.py`)
+  - `scripts/auto_checkpoint.py`: 신규 (세션 종료 시 checkpoint.md 타임스탬프 갱신)
+  - VM systemd: `User=root` → `User=stock` 교체
+  - `docs/system.md`, `docs/mlops.md`: 신규 (서비스/MLOps 문서)
+- 관련 파일: `data/store.py`, `agents/orchestrator.py`, `agents/buy_signal.py`, `agents/report.py`, `models/signals.py`, `main.py`, `mcp/mcp_telegram.py`, `.mcp.json`
+- 메모:
+  - 73분 → 21분: `_analyze_stock`이 매 종목마다 KRX 재호출하던 것을 DB에서만 읽도록 수정
+  - 21분 잔여 시간: e2-micro CPU에서 기술적 분석 계산 (Semaphore=2 × 100+ 종목 × ~10초)
+  - `--resend-last`: DB에서 마지막 signal_history + signal_xgb_probs 읽어 재발송 (~6초, 형식 테스트용)
+  - 대형주 기준: KOSPI 100위 이내 OR KOSDAQ 50위 이내 (DB 쿼리 기준 5조+와 유사 카운트)
+  - VM에 stock-monitor-vm(n1-standard-1) 별도 존재 확인 → DB 데이터 없음 확인 후 삭제
+  - git pull 권한 오류 `.git/objects` → `chown -R stock:stock .git/objects`로 해결
+  - sklearn 버전 경고: ET 모델 1.7.2 학습, VM 1.8.0 실행 (다음 재학습 시 해소)
+- 다음 아이디어: 정규 실행 후 signal_xgb_probs 확인, 사후 검증 자동화 (/verify)
+
+---
+
 ## 2026-05-16 세션 37 — DuckDB MCP 서버 구축 + 서비스 문서 정비
 - 작업: DuckDB MCP 서버 자체 개발, 서비스 전체 문서 작성
 - 변경 사항:
