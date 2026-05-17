@@ -78,9 +78,9 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
     signal_date      DATE,
     ticker           VARCHAR,
     entry_price      DOUBLE,
-    max_high_3d      DOUBLE,
-    max_high_5d      DOUBLE,
-    max_high_10d     DOUBLE,
+    max_close_3d     DOUBLE,
+    max_close_5d     DOUBLE,
+    max_close_10d    DOUBLE,
     max_drawdown_3d  DOUBLE,
     max_drawdown_5d  DOUBLE,
     max_drawdown_10d DOUBLE,
@@ -129,6 +129,16 @@ ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS xgb_prob DOUBLE;
 """
 
 
+def _migrate_backtest_labels(conn) -> None:
+    """max_high_* → max_close_* 컬럼 rename (기존 DB 1회 적용)."""
+    try:
+        conn.execute("ALTER TABLE backtest_labels RENAME COLUMN max_high_3d TO max_close_3d")
+        conn.execute("ALTER TABLE backtest_labels RENAME COLUMN max_high_5d TO max_close_5d")
+        conn.execute("ALTER TABLE backtest_labels RENAME COLUMN max_high_10d TO max_close_10d")
+    except Exception:
+        pass  # 이미 변경됐거나 컬럼 없음
+
+
 def init_db() -> None:
     with get_conn() as conn:
         # old long-format backtest_labels (hold_days 컬럼 존재) → DROP 후 재생성
@@ -139,6 +149,7 @@ def init_db() -> None:
             conn.execute("DROP TABLE backtest_labels")
         conn.execute(_DDL)
         conn.execute(_MIGRATIONS)
+        _migrate_backtest_labels(conn)
         # 기존 signal_history 레코드에 scoring_version 소급 설정
         # vol_score <= 6 은 일봉 근사 backfill, 초과는 60분봉 실시간 구버전
         conn.execute("""

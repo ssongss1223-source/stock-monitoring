@@ -407,7 +407,7 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     for d in _HOLD_DAYS:
         for pct in _TARGET_PCTS:
             df[f"label_{d}d_{pct}pct"] = (
-                df[f"max_high_{d}d"] >= df["entry_price"] * (1 + pct / 100)
+                df[f"max_close_{d}d"] >= df["entry_price"] * (1 + pct / 100)
             ).astype(int)
 
     return df

@@ -1,7 +1,7 @@
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 
 from pykrx import stock
 
@@ -267,6 +267,7 @@ class Orchestrator:
             _save_signal_history(buy_signals)
             if xgb_probs:
                 _save_signal_xgb_probs(xgb_probs)
+            _auto_label_unlabeled()
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
@@ -439,6 +440,29 @@ def _save_signal_xgb_probs(probs_by_ticker: dict[str, dict[str, float]]) -> None
         logger.exception("signal_xgb_probs 저장 실패")
     finally:
         conn.close()
+
+
+def _auto_label_unlabeled(cutoff_days: int = 15) -> None:
+    """signal_history 중 T+10 이상 경과한 미라벨 신호를 자동으로 라벨링."""
+    from backtest.labeler import label_batch, save_labels
+    cutoff = (date.today() - timedelta(days=cutoff_days)).isoformat()
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT sh.ticker, sh.signal_date
+            FROM signal_history sh
+            LEFT JOIN backtest_labels bl
+                ON sh.ticker = bl.ticker AND sh.signal_date = bl.signal_date
+            WHERE bl.signal_date IS NULL AND sh.signal_date <= ?
+        """, [cutoff]).fetchall()
+    finally:
+        conn.close()
+    if not rows:
+        return
+    pairs = [(r[0], r[1]) for r in rows]
+    labels = label_batch(pairs)
+    save_labels(labels)
+    logger.info("자동 라벨링 완료: %d건", len(labels))
 
 
 def _get_name(ticker: str) -> str:

@@ -6,7 +6,7 @@
 
 라벨 정의:
   entry_price      = T+1 시가
-  max_high_Xd      = T+1 ~ T+X 최고가
+  max_close_Xd     = T+1 ~ T+X 최고 종가 (EOD 매도로 달성 가능한 수익 기준)
   max_drawdown_Xd  = (T+1~X 최저가 - entry_price) / entry_price
   return_Xd        = (T+X 종가 - entry_price) / entry_price
 """
@@ -27,7 +27,7 @@ _HOLD_DAYS = [3, 5, 10]
 
 _LABEL_COLS = [
     "signal_date", "ticker", "entry_price",
-    "max_high_3d", "max_high_5d", "max_high_10d",
+    "max_close_3d", "max_close_5d", "max_close_10d",
     "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
     "return_3d", "return_5d", "return_10d",
 ]
@@ -59,10 +59,10 @@ def label_one(df_daily: pd.DataFrame, signal_date: str | date) -> dict | None:
     result: dict = {"entry_price": entry_price}
     for d in _HOLD_DAYS:
         w = window.iloc[:d]
-        max_high = float(w["High"].max())
+        max_close = float(w["Close"].max())
         min_low = float(w["Low"].min())
         close_n = float(w["Close"].iloc[-1])
-        result[f"max_high_{d}d"] = max_high
+        result[f"max_close_{d}d"] = max_close
         result[f"max_drawdown_{d}d"] = (min_low - entry_price) / entry_price
         result[f"return_{d}d"] = (close_n - entry_price) / entry_price
 
@@ -78,7 +78,7 @@ def label_batch(pairs: list[tuple[str, str | date]]) -> pd.DataFrame:
 
     Returns:
         columns: signal_date, ticker, entry_price,
-                 max_high_3d/5d/10d, max_drawdown_3d/5d/10d, return_3d/5d/10d
+                 max_close_3d/5d/10d, max_drawdown_3d/5d/10d, return_3d/5d/10d
     """
     if not pairs:
         return pd.DataFrame(columns=_LABEL_COLS)
@@ -140,7 +140,7 @@ def summarize(labels: pd.DataFrame) -> None:
     for pct in [3, 5, 10]:
         rates = []
         for d in _HOLD_DAYS:
-            achieved = (labels[f"max_high_{d}d"] >= labels["entry_price"] * (1 + pct / 100)).mean()
+            achieved = (labels[f"max_close_{d}d"] >= labels["entry_price"] * (1 + pct / 100)).mean()
             rates.append(f"{achieved:.1%}")
         print(f"  +{pct}% 달성률:     {rates[0]:>7s} {rates[1]:>7s} {rates[2]:>7s}")
 

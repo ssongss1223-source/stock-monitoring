@@ -116,10 +116,10 @@ def build_matrix(
         if labels_df.empty:
             logger.warning("레이블 없음: %s", d)
             continue
-        # wide format → hold_days 기준 max_high로 label 파생
-        high_col = f"max_high_{hold_days}d" if hold_days in (3, 5, 10) else "max_high_3d"
+        # wide format → hold_days 기준 max_close로 label 파생
+        close_col = f"max_close_{hold_days}d" if hold_days in (3, 5, 10) else "max_close_3d"
         labels_df["label"] = (
-            labels_df[high_col] >= labels_df["entry_price"] * (1 + target_pct)
+            labels_df[close_col] >= labels_df["entry_price"] * (1 + target_pct)
         ).astype(int)
         label_map = dict(zip(labels_df["ticker"], labels_df["label"]))
 

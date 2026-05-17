@@ -46,7 +46,7 @@ _TARGETS = [
 
 _DROP = {
     "signal_date", "ticker", "entry_price",
-    "max_high_3d", "max_high_5d", "max_high_10d",
+    "max_close_3d", "max_close_5d", "max_close_10d",
     "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
     "return_3d", "return_5d", "return_10d",
 }
@@ -209,7 +209,7 @@ def main() -> None:
 
     # Step 5: OOF 저장용 DataFrame 기반 컬럼 준비
     oof_df = df[["signal_date", "ticker", "entry_price",
-                 "max_high_3d", "max_high_5d", "max_high_10d"]].copy()
+                 "max_close_3d", "max_close_5d", "max_close_10d"]].copy()
     for t in _TARGETS:
         oof_df[t] = df[t]
 
@@ -219,11 +219,11 @@ def main() -> None:
     for target in _TARGETS:
         label_key = target.replace("label_", "")          # "3d_5pct"
         hold_period = label_key.split("_")[0]              # "3d"
-        max_high_col = f"max_high_{hold_period}"           # "max_high_3d"
+        max_close_col = f"max_close_{hold_period}"          # "max_close_3d"
 
         y = df[target]
-        # 수익률: max_high / entry_price - 1 (entry_price=0 방어)
-        max_return = (df[max_high_col] / df["entry_price"].replace(0, np.nan) - 1)
+        # 수익률: max_close / entry_price - 1 (entry_price=0 방어)
+        max_return = (df[max_close_col] / df["entry_price"].replace(0, np.nan) - 1)
 
         print(f"{'='*62}")
         print(f"  {target}  (positive={y.mean():.1%})")
