@@ -5,30 +5,46 @@ rules:
   - id: index_6m_uptrend
     points: 2
     description: "지수 6개월 추세 상승"
+
   - id: index_3m_uptrend
     points: 2
     description: "지수 3개월 추세 상승"
-  - id: index_1m_uptrend
+
+  - id: index_above_60ma
     points: 1
-    description: "지수 1개월 추세 상승"
-  - id: index_above_20ma
+    description: "지수 종가 > 60일선 (중기 추세 위치)"
+
+  - id: index_above_120ma
     points: 1
-    description: "지수 종가 > 20일선"
+    description: "지수 종가 > 120일선 (장기 추세 위치)"
+
   - id: foreign_futures_net_buy
     points: 2
     description: "외국인 선물 순매수"
+
   - id: sector_strong_ratio_70pct
     points: 1
     description: "업종 강세 종목 비율 70% 이상"
 
-# 최대 가능 점수: 9점
-thresholds:
-  bull: 8         # 8점 이상 → 상승장
-  sideways_min: 5 # 5~7점   → 횡보장
-  bear_max: 4     # 4점 이하 → 하락장
+  - id: sp500_above_20ma
+    points: 1
+    description: "S&P500 20일선 위 (글로벌 리스크온)"
 
-# 매수 등급 임계값에 더해지는 페널티 (차단이 아님, 기준만 높임)
-market_bias:
-  bull: 0
-  sideways: 2
-  bear: 5
+  - id: usdkrw_below_ma20
+    points: 1
+    description: "원/달러 환율 20일선 아래 (원화 강세)"
+
+  - id: sox_uptrend
+    points: 1
+    description: "SOX 반도체지수 1개월 상승"
+
+  - id: kospi_rv20_low
+    points: 1
+    description: "KOSPI 20일 실현변동성 ≤ 20% (저변동성 = 평온한 시장)"
+
+# 최대 가능 점수: 13점 (기존 9 + 매크로 3 + 변동성 1)
+thresholds:
+  bull: 10         # 10점 이상 → 상승장
+  sideways_min: 7  # 7~9점    → 횡보장
+  bear_max: 6      # 6점 이하  → 하락장
+

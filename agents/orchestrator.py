@@ -17,7 +17,7 @@ from agents.universe_manager import UniverseManager
 from agents.volume_analysis import VolumeAnalysisAgent
 from core.scoring_engine import ScoringEngine
 from data.db import get_conn
-from data.store import HourlyStore, MarketIndexStore, OhlcvStore
+from data.store import HourlyStore, MacroStore, MarketIndexStore, OhlcvStore
 from models.signals import BuySignal, MarketContext, PatternLearningResult
 
 logger = logging.getLogger(__name__)
@@ -146,6 +146,10 @@ class Orchestrator:
                 index_ok = True
             except Exception:
                 logger.exception("지수 데이터 수집 오류")
+            try:
+                await loop.run_in_executor(None, MacroStore.fetch_and_update)
+            except Exception:
+                logger.exception("매크로 데이터 수집 오류")
         except Exception:
             logger.exception("데이터 수집 오류")
         elapsed = int(time.monotonic() - start)

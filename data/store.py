@@ -404,6 +404,80 @@ class MarketIndexStore:
             conn.close()
 
 
+# ── MacroStore ────────────────────────────────────────────────────────────────
+
+class MacroStore:
+    """yfinance 글로벌 매크로 지표 수집 + macro_daily 저장."""
+
+    _TICKERS = {
+        "sp500":  "^GSPC",
+        "nasdaq": "^IXIC",
+        "usdkrw": "USDKRW=X",
+        "us10y":  "^TNX",
+        "wti":    "CL=F",
+        "sox":    "^SOX",
+    }
+    _COLS = ["date", "sp500", "nasdaq", "usdkrw", "us10y", "wti", "sox"]
+
+    @staticmethod
+    def fetch_and_update(lookback_days: int = 90) -> None:
+        start = (datetime.now() - timedelta(days=lookback_days)).strftime("%Y-%m-%d")
+        frames = {}
+        for col, ticker in MacroStore._TICKERS.items():
+            try:
+                df = yf.Ticker(ticker).history(start=start)
+                if df.empty:
+                    logger.warning("macro %s (%s) 데이터 없음", col, ticker)
+                    continue
+                frames[col] = df["Close"].rename(col)
+            except Exception as e:
+                logger.warning("macro %s (%s) 조회 실패: %s", col, ticker, e)
+
+        if not frames:
+            logger.error("매크로 수집 완전 실패 — 모든 티커 오류")
+            return
+
+        # 타임존 제거 후 날짜만 추출하여 시리즈 재인덱싱
+        normalized = {}
+        for col, s in frames.items():
+            idx = pd.to_datetime(s.index)
+            if idx.tz is not None:
+                idx = idx.tz_convert("UTC").tz_localize(None)
+            s = s.copy()
+            s.index = idx.normalize().date
+            normalized[col] = s
+
+        combined = pd.DataFrame(normalized)
+        combined.index.name = "date"
+        combined = combined.reset_index()
+        combined["date"] = pd.to_datetime(combined["date"]).dt.date
+        for c in MacroStore._COLS:
+            if c not in combined.columns:
+                combined[c] = None
+
+        conn = get_conn()
+        try:
+            conn.register("_macro", combined[MacroStore._COLS])
+            conn.execute(f"""
+                INSERT OR REPLACE INTO macro_daily
+                SELECT {', '.join(MacroStore._COLS)} FROM _macro
+            """)
+            logger.info("macro_daily 저장: %d행", len(combined))
+        finally:
+            conn.close()
+
+    @staticmethod
+    def load(lookback_days: int = 60) -> pd.DataFrame:
+        start = (datetime.now() - timedelta(days=lookback_days)).date()
+        conn = get_conn(read_only=True)
+        try:
+            return conn.execute(
+                "SELECT * FROM macro_daily WHERE date >= ? ORDER BY date", [start]
+            ).df()
+        finally:
+            conn.close()
+
+
 # ── 마이그레이션 ──────────────────────────────────────────────────────────────
 
 def migrate_parquet_to_duckdb() -> None:

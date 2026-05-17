@@ -19,6 +19,7 @@ class TechnicalResult:
     support: Optional[float]
     resistance: Optional[float]
     current_price: float = 0.0
+    atr: Optional[float] = None  # 14일 Average True Range
 
     @property
     def total_score(self) -> int:

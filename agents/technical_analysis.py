@@ -53,6 +53,7 @@ class TechnicalAnalysisAgent:
         pattern = _detect_pattern(close, high, low, vol)
         support = _find_support(close, low)
         resistance = _find_resistance(close, high)
+        atr = _calc_atr(high, low, close)
         current_price = float(close.iloc[-1])
 
         flags = {
@@ -65,6 +66,7 @@ class TechnicalAnalysisAgent:
         }
         result = self.engine.score_technical(flags)
         result.current_price = current_price
+        result.atr = atr
         return result
 
 
@@ -305,6 +307,22 @@ def _cup_handle(close: pd.Series, high: pd.Series, low: pd.Series,
     pullback = (cup_high - handle_low) / cup_high if cup_high > 0 else 1
     recovering = float(handle_close.iloc[-1]) > handle_low * 1.02
     return pullback <= 0.15 and recovering
+
+
+# ── ATR (Average True Range) ─────────────────────────────────────────────────
+
+def _calc_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> Optional[float]:
+    """14일 ATR. 종목별 변동성 기반 손절폭 산출에 사용."""
+    if len(close) < period + 1:
+        return None
+    prev_close = close.shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - prev_close).abs(),
+        (low - prev_close).abs(),
+    ], axis=1).max(axis=1)
+    val = float(tr.rolling(period).mean().iloc[-1])
+    return None if np.isnan(val) else val
 
 
 # ── 지지/저항 (전략서 8장) ───────────────────────────────────────────────────

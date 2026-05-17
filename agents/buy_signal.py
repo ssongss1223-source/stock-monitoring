@@ -81,13 +81,17 @@ def _pattern_bonus(pr: Optional[PatternLearningResult]) -> int:
 
 def _calc_stop_loss(current_price: float, tech: TechnicalResult) -> float:
     """
-    손절가: -5% 또는 구름대 하단 중 더 높은 값 (타이트한 쪽 우선).
-    지지선이 -5%보다 위에 있으면 그것을 손절선으로 사용.
+    손절가: ATR이 현재가의 5% 미만(저변동)이면 ATR×2 기반, 이상(고변동)이면 고정 -5%.
+    지지선이 더 높으면 지지선 우선.
     """
-    default_stop = current_price * 0.95
-    if tech.support is not None and float(tech.support) > default_stop:
+    if tech.atr is not None and tech.atr / current_price < 0.05:
+        base_stop = current_price - 2.0 * tech.atr
+    else:
+        base_stop = current_price * 0.95
+
+    if tech.support is not None and float(tech.support) > base_stop:
         return round(float(tech.support), 0)
-    return round(default_stop, 0)
+    return round(base_stop, 0)
 
 
 def _calc_target(current_price: float, tech: TechnicalResult) -> tuple[float, bool]:

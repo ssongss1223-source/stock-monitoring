@@ -97,6 +97,16 @@ CREATE TABLE IF NOT EXISTS signal_xgb_probs (
     xgb_prob    DOUBLE,
     PRIMARY KEY (signal_date, ticker, label)
 );
+
+CREATE TABLE IF NOT EXISTS macro_daily (
+    date    DATE PRIMARY KEY,
+    sp500   DOUBLE,
+    nasdaq  DOUBLE,
+    usdkrw  DOUBLE,
+    us10y   DOUBLE,
+    wti     DOUBLE,
+    sox     DOUBLE
+);
 """
 
 

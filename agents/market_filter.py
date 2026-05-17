@@ -61,10 +61,12 @@ class MarketFilterAgent:
             "market": market,
             "index_6m_uptrend": _uptrend(close, 126),
             "index_3m_uptrend": _uptrend(close, 63),
-            "index_1m_uptrend": _uptrend(close, 21),
-            "index_above_20ma": _above_ma(close, 20),
+            "index_above_60ma":  _above_ma(close, 60),
+            "index_above_120ma": _above_ma(close, 120),
             "foreign_futures_net_buy": _foreign_net_buy(market, today),
             "sector_strong_ratio_70pct": _sector_ratio(market, today),
+            **_macro_flags(),
+            **_rv_flag(),
         }
         return self.engine.score_market(flags)
 
@@ -95,19 +97,26 @@ def _above_ma(close: pd.Series, window: int) -> bool:
 def _foreign_net_buy(market: str, today: str) -> bool:
     """
     외국인 순매수 여부.
-    Phase 1: 현물 시장 외국인 순매수로 근사.
-    TODO Phase 2: KOSPI200 선물 실제 데이터로 교체.
+    ohlcv_daily.foreign_net 전종목 합산 기반 (DB-only).
+    ticker_master.market 미구축으로 KOSPI/KOSDAQ 구분 없이 합산.
     """
     try:
-        df = stock.get_market_trading_value_by_date(_ago(10), today, market)
-        if df is None or df.empty:
-            return False
-        for col in ("외국인합계", "외국인", "foreigners"):
-            if col in df.columns:
-                return float(df[col].iloc[-1]) > 0
+        from data.db import get_conn
+        conn = get_conn(read_only=True)
+        try:
+            row = conn.execute("""
+                SELECT SUM(foreign_net)
+                FROM ohlcv_daily
+                WHERE date = (SELECT MAX(date) FROM ohlcv_daily)
+            """).fetchone()
+        finally:
+            conn.close()
+        if row and row[0] is not None:
+            logger.debug("%s 외국인 순매수(전종목): %.0f", market, row[0])
+            return float(row[0]) > 0
         return False
-    except Exception:
-        logger.debug("외국인 순매수 조회 실패 → False")
+    except Exception as e:
+        logger.warning("외국인 순매수 DB 조회 실패: %s → False", e)
         return False
 
 
@@ -143,6 +152,63 @@ def _sector_ratio(market: str, today: str) -> bool:
     except Exception:
         logger.debug("섹터 강세 비율 조회 실패 → False")
         return False
+
+
+def _rv_flag() -> dict:
+    """KOSPI 20일 실현변동성 < 20% 이면 True (저변동성 = 평온한 시장)."""
+    try:
+        import numpy as np
+        from data.db import get_conn
+        conn = get_conn(read_only=True)
+        try:
+            df = conn.execute(
+                "SELECT close FROM market_index WHERE ticker='1001' ORDER BY date DESC LIMIT 25"
+            ).df()
+        finally:
+            conn.close()
+
+        if len(df) < 22:
+            logger.warning("market_index 데이터 부족(%d행) → rv_flag False", len(df))
+            return {"kospi_rv20_low": False}
+
+        close = df["close"].iloc[::-1].astype(float).values
+        log_ret = np.log(close[1:] / close[:-1])
+        rv = float(log_ret[-20:].std() * np.sqrt(252) * 100)
+        flag = rv <= 20.0
+        logger.debug("KOSPI 실현변동성(20일): %.1f%% → kospi_rv20_low=%s", rv, flag)
+        return {"kospi_rv20_low": flag}
+    except Exception as e:
+        logger.warning("실현변동성 계산 실패: %s → False", e)
+        return {"kospi_rv20_low": False}
+
+
+def _macro_flags() -> dict:
+    """macro_daily DB에서 글로벌 매크로 플래그 계산."""
+    try:
+        from data.store import MacroStore
+        df = MacroStore.load(lookback_days=60)
+        if df.empty or len(df) < 22:
+            logger.warning("macro_daily 데이터 부족(%d행) → 매크로 플래그 False", len(df))
+            return {"sp500_above_20ma": False, "usdkrw_below_ma20": False, "sox_uptrend": False}
+
+        sp500  = df["sp500"].dropna()
+        usdkrw = df["usdkrw"].dropna()
+        sox    = df["sox"].dropna()
+
+        sp500_flag  = len(sp500)  >= 20 and float(sp500.iloc[-1])  > float(sp500.rolling(20).mean().iloc[-1])
+        usdkrw_flag = len(usdkrw) >= 20 and float(usdkrw.iloc[-1]) < float(usdkrw.rolling(20).mean().iloc[-1])
+        sox_flag    = len(sox)    >= 22 and float(sox.iloc[-1])    > float(sox.iloc[-22])
+
+        logger.debug("매크로 플래그 | sp500_above_20ma=%s usdkrw_below_ma20=%s sox_uptrend=%s",
+                     sp500_flag, usdkrw_flag, sox_flag)
+        return {
+            "sp500_above_20ma":  sp500_flag,
+            "usdkrw_below_ma20": usdkrw_flag,
+            "sox_uptrend":       sox_flag,
+        }
+    except Exception as e:
+        logger.warning("매크로 플래그 계산 실패: %s → False", e)
+        return {"sp500_above_20ma": False, "usdkrw_below_ma20": False, "sox_uptrend": False}
 
 
 def _default_context(market: str, engine: ScoringEngine) -> MarketContext:
