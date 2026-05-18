@@ -26,12 +26,21 @@ _LABEL_DISPLAY = {
     "3d_3pct": "3일+3%", "3d_5pct": "3일+5%", "3d_10pct": "3일+10%",
     "5d_3pct": "5일+3%", "5d_5pct": "5일+5%", "5d_10pct": "5일+10%",
     "10d_3pct": "10일+3%", "10d_5pct": "10일+5%", "10d_10pct": "10일+10%",
+    "3d_3pct_c2": "3일+3%×2", "3d_5pct_c2": "3일+5%×2",
+    "5d_3pct_c2": "5일+3%×2", "5d_5pct_c2": "5일+5%×2", "5d_10pct_c2": "5일+10%×2",
+    "10d_3pct_c2": "10일+3%×2", "10d_5pct_c2": "10일+5%×2", "10d_10pct_c2": "10일+10%×2",
 }
 _PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
 _GAIN_PCT     = {"3pct": 0.03, "5pct": 0.05, "10pct": 0.10}
 _DAYS_MAP     = {"3d": 3, "5d": 5, "10d": 10}
-_SHORT_LABELS = ["3d_3pct", "3d_5pct", "3d_10pct", "5d_3pct", "5d_5pct", "5d_10pct"]
-_SWING_LABELS = ["10d_3pct", "10d_5pct", "10d_10pct"]
+_SHORT_LABELS = [
+    "3d_3pct", "3d_5pct", "3d_10pct", "5d_3pct", "5d_5pct", "5d_10pct",
+    "3d_3pct_c2", "3d_5pct_c2", "5d_3pct_c2", "5d_5pct_c2", "5d_10pct_c2",
+]
+_SWING_LABELS = [
+    "10d_3pct", "10d_5pct", "10d_10pct",
+    "10d_3pct_c2", "10d_5pct_c2", "10d_10pct_c2",
+]
 
 
 class ReportAgent:
@@ -184,7 +193,8 @@ def _loss_pct(s: BuySignal) -> float:
 
 
 def _ev_per_day(label: str, prob: float, loss: float) -> float:
-    d_str, p_str = label.split("_")
+    parts = label.split("_")
+    d_str, p_str = parts[0], parts[1]
     ev = prob * _GAIN_PCT[p_str] - (1 - prob) * loss
     return ev / _DAYS_MAP[d_str]
 

@@ -21,6 +21,9 @@ _LABELS = [
     "3d_3pct", "3d_5pct", "3d_10pct",
     "5d_3pct", "5d_5pct", "5d_10pct",
     "10d_3pct", "10d_5pct", "10d_10pct",
+    "3d_3pct_c2", "3d_5pct_c2",
+    "5d_3pct_c2", "5d_5pct_c2", "5d_10pct_c2",
+    "10d_3pct_c2", "10d_5pct_c2", "10d_10pct_c2",
 ]
 _PATTERNS = ["cup_handle", "falling_box_breakout", "triangle_convergence", "bb_squeeze"]
 
@@ -285,7 +288,7 @@ def _predict_one(prefix: str, ext: str, label: str, df: pd.DataFrame) -> np.ndar
 
 
 def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
-    """9개 라벨 추론. {ticker: {label: prob}} 반환. XGB + LGBM + ET soft voting."""
+    """17개 라벨 추론. {ticker: {label: prob}} 반환. XGB + LGBM + ET soft voting."""
     if not signals:
         return {}
 
@@ -303,7 +306,7 @@ def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
             if ticker in result:
                 result[ticker][label] = float(prob)
 
-    logger.info("ML 추론 완료: %d종목 9라벨 (soft-voting)", len(signals))
+    logger.info("ML 추론 완료: %d종목 17라벨 (soft-voting)", len(signals))
     return result
 
 
