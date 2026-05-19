@@ -48,3 +48,9 @@ thresholds:
   sideways_min: 7  # 7~9점    → 횡보장
   bear_max: 6      # 6점 이하  → 하락장
 
+# 매수 등급 임계값에 더해지는 페널티 (차단이 아님, 기준만 높임)
+market_bias:
+  bull: 0
+  sideways: 2
+  bear: 5
+
