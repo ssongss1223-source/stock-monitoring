@@ -120,7 +120,7 @@ def _build_message(
 
     if buy_signals:
         pr_by_ticker = {pr.ticker: pr for pr in (pattern_results or [])}
-        groups = _four_groups(buy_signals)
+        groups = _four_groups(buy_signals, pr_by_ticker)
         parts.append(_prediction_summary_section(*groups))
         parts.append(_buy_detail_section(*groups, pr_by_ticker))
     else:
@@ -199,22 +199,32 @@ def _ev_per_day(label: str, prob: float, loss: float) -> float:
     return ev / _DAYS_MAP[d_str]
 
 
+def _label_tiebreak(label: Optional[str]) -> tuple:
+    if not label:
+        return (999, 0.0)
+    parts = label.split("_")
+    d = _DAYS_MAP.get(parts[0], 999)
+    g = _GAIN_PCT.get(parts[1], 0.0) if len(parts) > 1 else 0.0
+    return (d, -g)
+
+
 def _four_groups(
     signals: list[BuySignal],
+    pr_by_ticker: Optional[dict[str, PatternLearningResult]] = None,
 ) -> tuple[
     list[tuple[BuySignal, float, str]],
     list[tuple[BuySignal, float, str]],
     list[tuple[BuySignal, float, str]],
     list[tuple[BuySignal, float, str]],
 ]:
-    """9라벨 × 전체 종목 케이스에서 그룹별 EV/day 상위 3개 추출.
-    종목당 그룹 내 EV 최대 라벨만 유지 (같은 종목 중복 방지)."""
-    # buckets: {group_key: {ticker: (signal, ev, label)}}
+    """ML확률 기준으로 그룹별 상위 3종목 추출.
+    단기 먼저 채우고, 단기 선택 ticker는 스윙에서 제외."""
+    pr_by_ticker = pr_by_ticker or {}
+    # buckets: {group_key: {ticker: (signal, prob, label)}}
     buckets: dict[str, dict[str, tuple[BuySignal, float, str]]] = {
         "ls": {}, "lw": {}, "ss": {}, "sw": {},
     }
     for s in signals:
-        loss = _loss_pct(s)
         g_prefix = "l" if _is_large_cap(s) else "s"
         for label in _SHORT_LABELS + _SWING_LABELS:
             g_key = g_prefix + ("s" if label in _SHORT_LABELS else "w")
@@ -226,18 +236,34 @@ def _four_groups(
                 continue
             if prob <= 0:
                 continue
-            ev = _ev_per_day(label, prob, loss)
             cur = buckets[g_key].get(s.ticker)
-            if cur is None or ev > cur[1]:
-                buckets[g_key][s.ticker] = (s, ev, label)
+            if cur is None or prob > cur[1]:
+                buckets[g_key][s.ticker] = (s, prob, label)
 
-    sort_key = lambda x: (-x[1], -(x[0].xgb_prob or 0))
-    return (
-        sorted(buckets["ls"].values(), key=sort_key)[:3],
-        sorted(buckets["lw"].values(), key=sort_key)[:3],
-        sorted(buckets["ss"].values(), key=sort_key)[:3],
-        sorted(buckets["sw"].values(), key=sort_key)[:3],
-    )
+    def sort_key(item: tuple):
+        s, prob, label = item
+        lb = _label_tiebreak(label)
+        pr = pr_by_ticker.get(s.ticker)
+        pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
+        loss = _loss_pct(s)
+        ev = _ev_per_day(label, prob, loss)
+        return (-prob, lb[0], lb[1], pg, -s.risk_reward, -ev)
+
+    large_short = sorted(buckets["ls"].values(), key=sort_key)[:3]
+    large_short_tickers = {s.ticker for s, _, _ in large_short}
+    large_swing = sorted(
+        [v for v in buckets["lw"].values() if v[0].ticker not in large_short_tickers],
+        key=sort_key,
+    )[:3]
+
+    small_short = sorted(buckets["ss"].values(), key=sort_key)[:3]
+    small_short_tickers = {s.ticker for s, _, _ in small_short}
+    small_swing = sorted(
+        [v for v in buckets["sw"].values() if v[0].ticker not in small_short_tickers],
+        key=sort_key,
+    )[:3]
+
+    return large_short, large_swing, small_short, small_swing
 
 
 def _is_large_cap(s: BuySignal) -> bool:

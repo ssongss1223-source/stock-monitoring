@@ -24,7 +24,9 @@ buy_grade:
       volume_min: 14
       total_min: 31
     bear:
-      allowed: false
+      trend_min: 14
+      volume_min: 15
+      total_min: 33
 
   A:
     bull:
