@@ -95,6 +95,23 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
     c2_10d_3pct      INT,
     c2_10d_5pct      INT,
     c2_10d_10pct     INT,
+    label_3d_3pct    BOOLEAN,
+    label_3d_5pct    BOOLEAN,
+    label_3d_10pct   BOOLEAN,
+    label_5d_3pct    BOOLEAN,
+    label_5d_5pct    BOOLEAN,
+    label_5d_10pct   BOOLEAN,
+    label_10d_3pct   BOOLEAN,
+    label_10d_5pct   BOOLEAN,
+    label_10d_10pct  BOOLEAN,
+    label_3d_3pct_c2  BOOLEAN,
+    label_3d_5pct_c2  BOOLEAN,
+    label_5d_3pct_c2  BOOLEAN,
+    label_5d_5pct_c2  BOOLEAN,
+    label_5d_10pct_c2 BOOLEAN,
+    label_10d_3pct_c2 BOOLEAN,
+    label_10d_5pct_c2 BOOLEAN,
+    label_10d_10pct_c2 BOOLEAN,
     PRIMARY KEY (signal_date, ticker)
 );
 
@@ -142,6 +159,23 @@ ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_10pct  INT;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_3pct  INT;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_5pct  INT;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_10pct INT;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_3pct     BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_5pct     BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_10pct    BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_3pct     BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_5pct     BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct    BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct    BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct    BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_3pct_c2  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_5pct_c2  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_3pct_c2  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_5pct_c2  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct_c2 BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct_c2 BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct_c2 BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct_c2 BOOLEAN;
 """
 
 
