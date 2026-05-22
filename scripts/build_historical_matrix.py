@@ -212,6 +212,8 @@ def insert_features(start: str, end: str, dry_run: bool = False) -> None:
     t0 = time.time()
     conn = get_conn()
     try:
+        conn.execute("SET memory_limit='700MB'")
+        conn.execute("SET temp_directory='/tmp'")
         conn.execute(_build_feature_sql(start, end))
         elapsed = time.time() - t0
         logger.info("피쳐 INSERT 완료 (%.1f초)", elapsed)

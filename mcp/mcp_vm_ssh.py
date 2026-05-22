@@ -1,5 +1,10 @@
-"""VM SSH MCP server — paramiko 직접 SSH."""
+"""VM SSH MCP server — IAP TCP 터널 + paramiko."""
 import asyncio
+import queue
+import socket
+import subprocess
+import threading
+import time
 from pathlib import Path
 
 import paramiko
@@ -7,7 +12,9 @@ import mcp.server.stdio
 import mcp.types as types
 from mcp.server import Server
 
-VM_HOST = "34.171.35.91"
+VM_INSTANCE = "instance-20260505-092414"
+VM_ZONE = "us-central1-a"
+VM_PROJECT = "stock-monitoring-495409"
 VM_USER = "KHSong"
 VM_APP_DIR = "/opt/stock-monitor"
 SSH_KEY = str(Path.home() / ".ssh" / "google_compute_engine")
@@ -15,28 +22,73 @@ SSH_KEY = str(Path.home() / ".ssh" / "google_compute_engine")
 server = Server("vm-ssh")
 
 
+def _free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+
 def _ssh_run(command: str, timeout: int = 60) -> str:
-    client = paramiko.SSHClient()
-    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    port = _free_port()
+
+    # IAP TCP tunnel (no plink — pure TCP forward)
+    tunnel = subprocess.Popen(
+        [
+            "gcloud", "compute", "start-iap-tunnel",
+            f"--project={VM_PROJECT}",
+            f"--zone={VM_ZONE}",
+            VM_INSTANCE, "22",
+            f"--local-host-port=localhost:{port}",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    ready_q: queue.Queue[bool] = queue.Queue()
+
+    def _watch_stderr():
+        for line in tunnel.stderr:
+            if b"Listening on port" in line:
+                ready_q.put(True)
+                return
+        ready_q.put(False)  # process exited without "Listening" line
+
+    threading.Thread(target=_watch_stderr, daemon=True).start()
+
     try:
+        try:
+            ready = ready_q.get(timeout=15)
+        except queue.Empty:
+            return "ERROR: IAP tunnel startup timeout (15s)"
+        if not ready:
+            err = tunnel.stderr.read().decode("utf-8", errors="replace")
+            return f"ERROR: IAP tunnel failed: {err}"
+
+        client = paramiko.SSHClient()
+        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
         client.connect(
-            VM_HOST,
-            username=VM_USER,
-            key_filename=SSH_KEY,
-            timeout=10,
-            banner_timeout=10,
+            "localhost", port=port,
+            username=VM_USER, key_filename=SSH_KEY,
+            timeout=10, banner_timeout=15,
         )
-        _, stdout, stderr = client.exec_command(command, timeout=timeout)
-        out = stdout.read().decode("utf-8", errors="replace").strip()
-        err = stderr.read().decode("utf-8", errors="replace").strip()
-        exit_code = stdout.channel.recv_exit_status()
-        if exit_code != 0 and not out:
-            return f"ERROR (exit {exit_code}): {err}"
-        return out or err
+        try:
+            _, stdout, stderr = client.exec_command(command, timeout=timeout)
+            out = stdout.read().decode("utf-8", errors="replace").strip()
+            err = stderr.read().decode("utf-8", errors="replace").strip()
+            exit_code = stdout.channel.recv_exit_status()
+            if exit_code != 0 and not out:
+                return f"ERROR (exit {exit_code}): {err}"
+            return out or err
+        finally:
+            client.close()
     except Exception as e:
         return f"ERROR: {e}"
     finally:
-        client.close()
+        tunnel.terminate()
+        try:
+            tunnel.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            tunnel.kill()
 
 
 async def _run(command: str, timeout: int = 60) -> str:
