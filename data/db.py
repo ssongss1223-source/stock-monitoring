@@ -132,6 +132,79 @@ CREATE TABLE IF NOT EXISTS macro_daily (
     wti     DOUBLE,
     sox     DOUBLE
 );
+
+CREATE TABLE IF NOT EXISTS universe_daily (
+    date              DATE,
+    ticker            VARCHAR,
+    PRIMARY KEY (date, ticker),
+
+    close             DOUBLE,
+    volume            BIGINT,
+    market_cap        BIGINT,
+    per               DOUBLE,
+    pbr               DOUBLE,
+    turnover_rate     DOUBLE,
+
+    trend_score       SMALLINT,
+    ma5_ratio         DOUBLE,
+    ma20_ratio        DOUBLE,
+    ma60_ratio        DOUBLE,
+    ma120_ratio       DOUBLE,
+    rsi_14            DOUBLE,
+    bb_position       DOUBLE,
+    hist_vol_20d      DOUBLE,
+    close_to_52w_high DOUBLE,
+
+    foreign_net_5d    DOUBLE,
+    inst_net_5d       DOUBLE,
+    foreign_net_20d   DOUBLE,
+    volume_surge_5d   DOUBLE,
+
+    kospi_ret_5d      DOUBLE,
+    kospi_ret_20d     DOUBLE,
+
+    vol_score_approx  SMALLINT,
+    vol_score_live    SMALLINT,
+    grade_approx      VARCHAR,
+    grade_live        VARCHAR,
+
+    pred_3d_3pct      DOUBLE,
+    pred_3d_5pct      DOUBLE,
+    pred_3d_10pct     DOUBLE,
+    pred_5d_3pct      DOUBLE,
+    pred_5d_5pct      DOUBLE,
+    pred_5d_10pct     DOUBLE,
+    pred_10d_3pct     DOUBLE,
+    pred_10d_5pct     DOUBLE,
+    pred_10d_10pct    DOUBLE,
+    pred_3d_3pct_c2   DOUBLE,
+    pred_3d_5pct_c2   DOUBLE,
+    pred_5d_3pct_c2   DOUBLE,
+    pred_5d_5pct_c2   DOUBLE,
+    pred_5d_10pct_c2  DOUBLE,
+    pred_10d_3pct_c2  DOUBLE,
+    pred_10d_5pct_c2  DOUBLE,
+    pred_10d_10pct_c2 DOUBLE,
+
+    entry_price        DOUBLE,
+    label_3d_3pct      BOOLEAN,
+    label_3d_5pct      BOOLEAN,
+    label_3d_10pct     BOOLEAN,
+    label_5d_3pct      BOOLEAN,
+    label_5d_5pct      BOOLEAN,
+    label_5d_10pct     BOOLEAN,
+    label_10d_3pct     BOOLEAN,
+    label_10d_5pct     BOOLEAN,
+    label_10d_10pct    BOOLEAN,
+    label_3d_3pct_c2   BOOLEAN,
+    label_3d_5pct_c2   BOOLEAN,
+    label_5d_3pct_c2   BOOLEAN,
+    label_5d_5pct_c2   BOOLEAN,
+    label_5d_10pct_c2  BOOLEAN,
+    label_10d_3pct_c2  BOOLEAN,
+    label_10d_5pct_c2  BOOLEAN,
+    label_10d_10pct_c2 BOOLEAN
+);
 """
 
 

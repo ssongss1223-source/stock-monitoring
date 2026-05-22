@@ -3,11 +3,12 @@ import json
 import logging
 from datetime import date, timedelta
 
+import pandas as pd
 from pykrx import stock
 
 import config
 from agents.buy_signal import BuySignalAgent
-from agents.ml_scorer import score_all_labels
+from agents.ml_scorer import score_all_labels, score_universe_all
 from agents.market_filter import MarketFilterAgent
 from agents.pattern_learning import StockPatternLearner
 from agents.report import ReportAgent
@@ -85,7 +86,6 @@ class Orchestrator:
             lp = all_label_probs.get(ticker, {})
             best_lbl = max(lp, key=lp.get) if lp else feat.get("best_label")
             # DB xgb_prob 칼럼을 fallback으로 사용 (signal_xgb_probs가 비어있을 때)
-            import pandas as pd
             db_prob = float(row["xgb_prob"]) if (row["xgb_prob"] is not None and pd.notna(row["xgb_prob"])) else None
             best_prob = lp[best_lbl] if (lp and best_lbl) else db_prob
             s = BuySignal(
@@ -178,6 +178,10 @@ class Orchestrator:
                 await loop.run_in_executor(None, MacroStore.fetch_and_update)
             except Exception:
                 logger.exception("매크로 데이터 수집 오류")
+            try:
+                await loop.run_in_executor(None, _insert_universe_daily)
+            except Exception:
+                logger.exception("universe_daily INSERT 오류")
         except Exception:
             logger.exception("데이터 수집 오류")
         elapsed = int(time.monotonic() - start)
@@ -228,6 +232,7 @@ class Orchestrator:
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
         all_analyzed: list[tuple[str, str]] = []  # (ticker, name) 전체 분석 종목
+        universe_scores: list[tuple[str, int, int]] = []  # (ticker, trend_score, vol_score_live)
         buy_signals: list[BuySignal] = []
         pattern_results: list[PatternLearningResult] = []
         errs = []
@@ -235,8 +240,9 @@ class Orchestrator:
             if isinstance(r, Exception):
                 errs.append(r)
             elif isinstance(r, tuple):
-                tk, nm, bs, pr = r
+                tk, nm, bs, pr, ts, vs = r
                 all_analyzed.append((tk, nm))
+                universe_scores.append((tk, ts, vs))
                 if bs is not None:
                     buy_signals.append(bs)
                 pattern_results.append(pr)
@@ -269,6 +275,17 @@ class Orchestrator:
                 _save_signal_xgb_probs(xgb_probs)
             _auto_label_unlabeled()
 
+        # ── 4c. universe_daily 업데이트 (전종목 trend/vol + ML 예측 + 라벨) ──
+        conn_r = get_conn(read_only=True)
+        try:
+            row = conn_r.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()
+            trade_date = str(row[0]) if row[0] else date.today().isoformat()
+        finally:
+            conn_r.close()
+        _update_universe_vol_trend(trade_date, universe_scores)
+        _update_universe_preds(trade_date)
+        _auto_label_universe_unlabeled()
+
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
         s_grade_signals = [s for s in buy_signals if s.grade == "S" and s.risk_reward >= 2.0]
@@ -281,7 +298,7 @@ class Orchestrator:
         market_name: str,
         markets: dict[str, MarketContext],
         semaphore: asyncio.Semaphore,
-    ) -> tuple[str, str, BuySignal | None, PatternLearningResult]:
+    ) -> tuple[str, str, BuySignal | None, PatternLearningResult, int, int]:
         async with semaphore:
             loop = asyncio.get_running_loop()
             market_ctx = markets.get(market_name, markets.get("KOSPI"))
@@ -291,7 +308,7 @@ class Orchestrator:
             df_daily = await loop.run_in_executor(None, OhlcvStore.load_daily, ticker)
             if df_daily is None:
                 logger.warning("%s 일봉 데이터 없음 — 건너뜀 (run_collect 먼저 실행 필요)", ticker)
-                return ticker, name, None, StockPatternLearner._insufficient(ticker)
+                return ticker, name, None, StockPatternLearner._insufficient(ticker), 0, 0
 
             # ── 2. 60분봉 DB 읽기 (실패해도 계속) ──
             try:
@@ -313,7 +330,7 @@ class Orchestrator:
                 )
             except asyncio.TimeoutError:
                 logger.warning("%s 분석 타임아웃(20s) — 건너뜀", ticker)
-                return ticker, name, None, StockPatternLearner._insufficient(ticker)
+                return ticker, name, None, StockPatternLearner._insufficient(ticker), 0, 0
 
             # ── 4. 패턴학습 (60분봉 채널 포함) ──
             pattern_learner = StockPatternLearner()
@@ -326,7 +343,7 @@ class Orchestrator:
                 ticker, name, tech, vol, market_ctx,
                 pattern_result=pattern_result,
             )
-            return ticker, name, buy_signal, pattern_result
+            return ticker, name, buy_signal, pattern_result, tech.total_score, vol.volume_score
 
 
 def _is_trading_day() -> bool:
@@ -463,6 +480,300 @@ def _auto_label_unlabeled(cutoff_days: int = 15) -> None:
     labels = label_batch(pairs)
     save_labels(labels)
     logger.info("자동 라벨링 완료: %d건", len(labels))
+
+
+def _insert_universe_daily() -> None:
+    """전종목 일봉 피쳐를 universe_daily에 INSERT OR REPLACE. 수집 배치 완료 후 실행."""
+    conn = get_conn()
+    try:
+        conn.execute("""
+            INSERT OR REPLACE INTO universe_daily (
+                date, ticker,
+                close, volume, market_cap, per, pbr, turnover_rate,
+                trend_score,
+                ma5_ratio, ma20_ratio, ma60_ratio, ma120_ratio,
+                rsi_14, bb_position, hist_vol_20d, close_to_52w_high,
+                foreign_net_5d, inst_net_5d, foreign_net_20d, volume_surge_5d,
+                kospi_ret_5d, kospi_ret_20d,
+                vol_score_approx, vol_score_live,
+                grade_approx, grade_live
+            )
+            WITH
+            latest AS (
+                SELECT MAX(date) AS td FROM ohlcv_daily
+            ),
+            hist AS (
+                SELECT
+                    ticker, date,
+                    CAST(close   AS DOUBLE) AS close,
+                    CAST(volume  AS DOUBLE) AS volume,
+                    market_cap, per, pbr,
+                    COALESCE(CAST(shares      AS BIGINT), 0)  AS shares,
+                    COALESCE(CAST(foreign_net AS DOUBLE), 0.0) AS foreign_net,
+                    COALESCE(CAST(inst_net    AS DOUBLE), 0.0) AS inst_net
+                FROM ohlcv_daily
+                WHERE date >= (SELECT td FROM latest) - INTERVAL '265 days'
+                  AND ticker IN (
+                      SELECT DISTINCT ticker FROM ohlcv_daily
+                      WHERE date = (SELECT td FROM latest)
+                  )
+            ),
+            roll AS (
+                SELECT
+                    ticker, date, close, volume, market_cap, per, pbr, shares,
+                    foreign_net, inst_net,
+                    CASE WHEN shares > 0 THEN volume / shares ELSE NULL END AS turnover_rate,
+                    close / NULLIF(AVG(close) OVER w5,   0) AS ma5_ratio,
+                    close / NULLIF(AVG(close) OVER w20,  0) AS ma20_ratio,
+                    close / NULLIF(AVG(close) OVER w60,  0) AS ma60_ratio,
+                    close / NULLIF(AVG(close) OVER w120, 0) AS ma120_ratio,
+                    close / NULLIF(MAX(close) OVER w252, 0) AS close_to_52w_high,
+                    AVG(close)    OVER w20 AS sma20,
+                    STDDEV(close) OVER w20 AS std20,
+                    volume / NULLIF(
+                        AVG(volume) OVER (PARTITION BY ticker ORDER BY date
+                                         ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING), 0
+                    ) AS volume_surge_5d,
+                    SUM(foreign_net) OVER w5  AS foreign_net_5d,
+                    SUM(inst_net)    OVER w5  AS inst_net_5d,
+                    SUM(foreign_net) OVER w20 AS foreign_net_20d,
+                    QUANTILE_CONT(
+                        CASE WHEN shares > 0 THEN volume / shares ELSE NULL END, 0.8
+                    ) OVER w60 AS turnover_p80
+                FROM hist
+                WINDOW
+                    w5   AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4   PRECEDING AND CURRENT ROW),
+                    w20  AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19  PRECEDING AND CURRENT ROW),
+                    w60  AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59  PRECEDING AND CURRENT ROW),
+                    w120 AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 119 PRECEDING AND CURRENT ROW),
+                    w252 AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 251 PRECEDING AND CURRENT ROW)
+            ),
+            pdiff AS (
+                SELECT ticker, date,
+                       close - LAG(close) OVER (PARTITION BY ticker ORDER BY date) AS d
+                FROM hist
+            ),
+            rsi AS (
+                SELECT ticker, date,
+                       100.0 - 100.0 / (
+                           1 + AVG(GREATEST(d, 0))  OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW)
+                             / NULLIF(AVG(GREATEST(-d, 0)) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW), 0)
+                       ) AS rsi_14
+                FROM pdiff
+            ),
+            lret AS (
+                SELECT ticker, date,
+                       ln(close / NULLIF(LAG(close) OVER (PARTITION BY ticker ORDER BY date), 0)) AS lr
+                FROM hist
+            ),
+            hvol AS (
+                SELECT ticker, date,
+                       STDDEV(lr) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS hist_vol_20d
+                FROM lret
+            ),
+            kospi AS (
+                SELECT date,
+                       close / NULLIF(LAG(close, 5)  OVER (ORDER BY date), 0) - 1 AS kospi_ret_5d,
+                       close / NULLIF(LAG(close, 20) OVER (ORDER BY date), 0) - 1 AS kospi_ret_20d
+                FROM market_index WHERE ticker = '1001'
+            ),
+            combined AS (
+                SELECT
+                    r.ticker, r.date,
+                    r.close, CAST(r.volume AS BIGINT) AS volume,
+                    r.market_cap, r.per, r.pbr, r.turnover_rate,
+                    r.ma5_ratio, r.ma20_ratio, r.ma60_ratio, r.ma120_ratio,
+                    r.close_to_52w_high,
+                    CASE WHEN r.std20 > 0
+                         THEN (r.close - (r.sma20 - 2 * r.std20)) / (4 * r.std20)
+                         ELSE 0.5 END AS bb_position,
+                    hv.hist_vol_20d,
+                    rs.rsi_14,
+                    r.foreign_net_5d, r.inst_net_5d, r.foreign_net_20d,
+                    r.volume_surge_5d,
+                    k.kospi_ret_5d, k.kospi_ret_20d,
+                    CAST(
+                        CASE WHEN r.volume_surge_5d >= 2.0 THEN 5 ELSE 0 END
+                        + CASE WHEN r.turnover_rate IS NOT NULL
+                                    AND r.turnover_p80 IS NOT NULL
+                                    AND r.turnover_rate >= r.turnover_p80 THEN 3 ELSE 0 END
+                        + CASE WHEN r.foreign_net_5d > 0 THEN 2 ELSE 0 END
+                    AS SMALLINT) AS vol_score_approx
+                FROM roll r
+                LEFT JOIN rsi  rs USING (ticker, date)
+                LEFT JOIN hvol hv USING (ticker, date)
+                LEFT JOIN kospi k USING (date)
+            )
+            SELECT
+                c.date, c.ticker,
+                c.close, c.volume, c.market_cap, c.per, c.pbr, c.turnover_rate,
+                NULL::SMALLINT AS trend_score,
+                c.ma5_ratio, c.ma20_ratio, c.ma60_ratio, c.ma120_ratio,
+                c.rsi_14, c.bb_position, c.hist_vol_20d, c.close_to_52w_high,
+                c.foreign_net_5d, c.inst_net_5d, c.foreign_net_20d, c.volume_surge_5d,
+                c.kospi_ret_5d, c.kospi_ret_20d,
+                c.vol_score_approx, NULL::SMALLINT AS vol_score_live,
+                CASE WHEN c.vol_score_approx >= 8 THEN 'S'
+                     WHEN c.vol_score_approx >= 5 THEN 'A'
+                     WHEN c.vol_score_approx >= 2 THEN 'B'
+                     ELSE NULL END AS grade_approx,
+                NULL::VARCHAR AS grade_live
+            FROM combined c
+            CROSS JOIN latest l
+            WHERE c.date = l.td
+        """)
+        logger.info("universe_daily INSERT 완료")
+    except Exception:
+        logger.exception("universe_daily INSERT 실패")
+    finally:
+        conn.close()
+
+
+def _update_universe_vol_trend(
+    date_str: str,
+    scores: list[tuple[str, int, int]],  # (ticker, trend_score, vol_score_live)
+) -> None:
+    """universe_daily에 trend_score, vol_score_live, grade_live 일괄 UPDATE."""
+    if not scores:
+        return
+    df = pd.DataFrame(scores, columns=["ticker", "trend_score", "vol_score_live"])
+    conn = get_conn()
+    try:
+        conn.register("_scores", df)
+        conn.execute(f"""
+            UPDATE universe_daily ud
+            SET trend_score    = s.trend_score,
+                vol_score_live = s.vol_score_live,
+                grade_live = CASE WHEN s.vol_score_live >= 13 THEN 'S'
+                                  WHEN s.vol_score_live >= 10 THEN 'A'
+                                  WHEN s.vol_score_live >= 7  THEN 'B'
+                                  ELSE NULL END
+            FROM _scores s
+            WHERE ud.date = CAST('{date_str}' AS DATE)
+              AND ud.ticker = s.ticker
+        """)
+        logger.info("universe_daily vol/trend UPDATE 완료: %d건", len(scores))
+    except Exception:
+        logger.exception("universe_daily vol/trend UPDATE 실패")
+    finally:
+        conn.close()
+
+
+def _update_universe_preds(date_str: str) -> None:
+    """universe_daily에 ML 예측 확률 일괄 UPDATE."""
+    _PRED_LABELS = [
+        "3d_3pct", "3d_5pct", "3d_10pct",
+        "5d_3pct", "5d_5pct", "5d_10pct",
+        "10d_3pct", "10d_5pct", "10d_10pct",
+        "3d_3pct_c2", "3d_5pct_c2",
+        "5d_3pct_c2", "5d_5pct_c2", "5d_10pct_c2",
+        "10d_3pct_c2", "10d_5pct_c2", "10d_10pct_c2",
+    ]
+    try:
+        probs_by_ticker = score_universe_all(date_str)
+    except Exception:
+        logger.exception("universe ML 추론 실패 — pred_* UPDATE 건너뜀")
+        return
+    if not probs_by_ticker:
+        return
+
+    rows = []
+    for ticker, lp in probs_by_ticker.items():
+        row: dict = {"ticker": ticker}
+        for lbl in _PRED_LABELS:
+            row[f"pred_{lbl}"] = lp.get(lbl)
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+    pred_cols = [f"pred_{l}" for l in _PRED_LABELS]
+    set_clause = ", ".join(f"ud.{col} = s.{col}" for col in pred_cols)
+
+    conn = get_conn()
+    try:
+        conn.register("_preds", df)
+        conn.execute(f"""
+            UPDATE universe_daily ud
+            SET {set_clause}
+            FROM _preds s
+            WHERE ud.date = CAST('{date_str}' AS DATE)
+              AND ud.ticker = s.ticker
+        """)
+        logger.info("universe_daily ML 예측 UPDATE 완료: %d종목", len(rows))
+    except Exception:
+        logger.exception("universe_daily ML 예측 UPDATE 실패")
+    finally:
+        conn.close()
+
+
+def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
+    """universe_daily 중 15일 이상 경과한 미라벨 행의 라벨을 자동 계산해 UPDATE."""
+    from backtest.labeler import label_one
+    cutoff = (date.today() - timedelta(days=cutoff_days)).isoformat()
+
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute("""
+            SELECT ticker, date::VARCHAR FROM universe_daily
+            WHERE label_3d_3pct IS NULL AND date <= CAST(? AS DATE)
+            ORDER BY date, ticker
+        """, [cutoff]).fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return
+
+    tickers = list({r[0] for r in rows})
+    conn_r = get_conn(read_only=True)
+    try:
+        placeholders = ", ".join("?" * len(tickers))
+        df_all = conn_r.execute(
+            f"SELECT ticker, date, open, high, low, close FROM ohlcv_daily "
+            f"WHERE ticker IN ({placeholders}) ORDER BY ticker, date",
+            tickers,
+        ).df()
+    finally:
+        conn_r.close()
+
+    df_all["date"] = pd.to_datetime(df_all["date"])
+
+    _LABEL_COLS = [
+        "entry_price",
+        "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
+        "label_5d_3pct", "label_5d_5pct", "label_5d_10pct",
+        "label_10d_3pct", "label_10d_5pct", "label_10d_10pct",
+        "label_3d_3pct_c2", "label_3d_5pct_c2",
+        "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
+        "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
+    ]
+    labeled_rows = []
+    for ticker, date_str in rows:
+        df = df_all[df_all["ticker"] == ticker].set_index("date")
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
+        result = label_one(df, date_str)
+        if result is not None:
+            labeled_rows.append({"ticker": ticker, "date": date_str, **result})
+
+    if not labeled_rows:
+        return
+
+    df_labels = pd.DataFrame(labeled_rows)
+    set_clause = ", ".join(f"ud.{col} = s.{col}" for col in _LABEL_COLS)
+    conn = get_conn()
+    try:
+        conn.register("_lbls", df_labels)
+        conn.execute(f"""
+            UPDATE universe_daily ud
+            SET {set_clause}
+            FROM _lbls s
+            WHERE ud.date = CAST(s.date AS DATE)
+              AND ud.ticker = s.ticker
+        """)
+        logger.info("universe_daily 라벨 UPDATE 완료: %d건", len(labeled_rows))
+    except Exception:
+        logger.exception("universe_daily 라벨 UPDATE 실패")
+    finally:
+        conn.close()
 
 
 def _get_name(ticker: str) -> str:
