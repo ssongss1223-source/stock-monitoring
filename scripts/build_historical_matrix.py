@@ -41,6 +41,10 @@ _LABEL_COLS = [
     "label_3d_3pct_c2", "label_3d_5pct_c2",
     "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
     "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
+    "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
+    "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
+    "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
+    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
 ]
 
 
@@ -264,11 +268,20 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
 
     df_all["date"] = pd.to_datetime(df_all["date"])
 
+    ticker_dfs = {
+        ticker: grp.set_index("date").rename(
+            columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}
+        )
+        for ticker, grp in df_all.groupby("ticker", sort=False)
+    }
+
     labeled_rows: list[dict] = []
     skipped = 0
     for ticker, date_str in rows:
-        df = df_all[df_all["ticker"] == ticker].set_index("date")
-        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
+        df = ticker_dfs.get(ticker)
+        if df is None:
+            skipped += 1
+            continue
         result = label_one(df, date_str)
         if result is not None:
             labeled_rows.append({"ticker": ticker, "date": date_str, **result})

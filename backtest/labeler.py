@@ -29,6 +29,9 @@ _PCT_TARGETS = [3, 5, 10]
 # c2: 해당 기간 내 종가가 목표 이상인 날 >= 2일 (3d_10pct 제외 — 달성률 2.9%)
 _C2_COMBOS = [(3, 3), (3, 5), (5, 3), (5, 5), (5, 10), (10, 3), (10, 5), (10, 10)]
 
+# clean 라벨: 목표 달성 + 달성 전 낙폭이 임계치 이내 (R:R 비례)
+_DD_THRESH = {3: -0.02, 5: -0.03, 10: -0.05}
+
 _LABEL_COLS = [
     "signal_date", "ticker", "entry_price",
     "max_close_3d", "max_close_5d", "max_close_10d",
@@ -37,6 +40,8 @@ _LABEL_COLS = [
     *[f"c2_{d}d_{p}pct" for d, p in _C2_COMBOS],
     *[f"label_{d}d_{p}pct" for d in _HOLD_DAYS for p in _PCT_TARGETS],
     *[f"label_{d}d_{p}pct_c2" for d, p in _C2_COMBOS],
+    *[f"label_{d}d_{p}pct_clean" for d in _HOLD_DAYS for p in _PCT_TARGETS],
+    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
 ]
 
 
@@ -85,6 +90,30 @@ def label_one(df_daily: pd.DataFrame, signal_date: str | date) -> dict | None:
 
     for d, p in _C2_COMBOS:
         result[f"label_{d}d_{p}pct_c2"] = int(result[f"c2_{d}d_{p}pct"] >= 2)
+
+    for d in _HOLD_DAYS:
+        w = window.iloc[:d]
+        for p in _PCT_TARGETS:
+            target = entry_price * (1 + p / 100)
+            hit_idx = next((i for i, c in enumerate(w["Close"]) if c >= target), None)
+            if hit_idx is None:
+                result[f"label_{d}d_{p}pct_clean"] = 0
+            else:
+                min_low = float(w.iloc[:hit_idx + 1]["Low"].min())
+                max_dd = (min_low - entry_price) / entry_price
+                result[f"label_{d}d_{p}pct_clean"] = int(max_dd >= _DD_THRESH[p])
+
+    for p, dd in [(3, -0.02), (5, -0.03), (10, -0.05)]:
+        up_tgt   = entry_price * (1 + p / 100)
+        down_tgt = entry_price * (1 + dd)
+        val = 0
+        for i in range(len(window)):
+            row = window.iloc[i]
+            if row["Close"] >= up_tgt:
+                val = 1; break
+            if row["Low"] <= down_tgt:
+                val = 0; break
+        result[f"label_first_up_{p}pct"] = val
 
     return result
 

@@ -1,11 +1,12 @@
 """VM SSH MCP server — IAP TCP 터널 + paramiko."""
 import asyncio
-import queue
 import socket
 import subprocess
-import threading
 import time
 from pathlib import Path
+
+# gcloud이 Claude Code 프로세스 PATH에 없는 경우를 대비해 직접 지정
+_GCLOUD = r"C:\Users\KHSong\AppData\Local\Google\Cloud SDK\google-cloud-sdk\bin\gcloud.cmd"
 
 import paramiko
 import mcp.server.stdio
@@ -28,41 +29,40 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+def _wait_for_port(port: int, timeout: int = 30) -> bool:
+    """포트가 열릴 때까지 폴링 (gcloud 출력 메시지에 의존하지 않음)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            with socket.create_connection(("localhost", port), timeout=1):
+                return True
+        except OSError:
+            time.sleep(0.5)
+    return False
+
+
 def _ssh_run(command: str, timeout: int = 60) -> str:
     port = _free_port()
 
-    # IAP TCP tunnel (no plink — pure TCP forward)
+    _NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW — 콘솔 없는 VSCode 환경에서 필수
     tunnel = subprocess.Popen(
         [
-            "gcloud", "compute", "start-iap-tunnel",
+            "cmd", "/c", _GCLOUD, "compute", "start-iap-tunnel",
             f"--project={VM_PROJECT}",
             f"--zone={VM_ZONE}",
             VM_INSTANCE, "22",
             f"--local-host-port=localhost:{port}",
         ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=_NO_WINDOW,
     )
 
-    ready_q: queue.Queue[bool] = queue.Queue()
-
-    def _watch_stderr():
-        for line in tunnel.stderr:
-            if b"Listening on port" in line:
-                ready_q.put(True)
-                return
-        ready_q.put(False)  # process exited without "Listening" line
-
-    threading.Thread(target=_watch_stderr, daemon=True).start()
-
     try:
-        try:
-            ready = ready_q.get(timeout=15)
-        except queue.Empty:
-            return "ERROR: IAP tunnel startup timeout (15s)"
-        if not ready:
-            err = tunnel.stderr.read().decode("utf-8", errors="replace")
-            return f"ERROR: IAP tunnel failed: {err}"
+        if not _wait_for_port(port, timeout=35):
+            rc = tunnel.poll()
+            return f"ERROR: IAP tunnel startup timeout (35s), process exit={rc}"
 
         client = paramiko.SSHClient()
         client.set_missing_host_key_policy(paramiko.AutoAddPolicy())

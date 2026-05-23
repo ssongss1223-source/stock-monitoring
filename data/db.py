@@ -112,6 +112,18 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
     label_10d_3pct_c2 BOOLEAN,
     label_10d_5pct_c2 BOOLEAN,
     label_10d_10pct_c2 BOOLEAN,
+    label_3d_3pct_clean   BOOLEAN,
+    label_3d_5pct_clean   BOOLEAN,
+    label_3d_10pct_clean  BOOLEAN,
+    label_5d_3pct_clean   BOOLEAN,
+    label_5d_5pct_clean   BOOLEAN,
+    label_5d_10pct_clean  BOOLEAN,
+    label_10d_3pct_clean  BOOLEAN,
+    label_10d_5pct_clean  BOOLEAN,
+    label_10d_10pct_clean BOOLEAN,
+    label_first_up_3pct   BOOLEAN,
+    label_first_up_5pct   BOOLEAN,
+    label_first_up_10pct  BOOLEAN,
     PRIMARY KEY (signal_date, ticker)
 );
 
@@ -203,7 +215,19 @@ CREATE TABLE IF NOT EXISTS universe_daily (
     label_5d_10pct_c2  BOOLEAN,
     label_10d_3pct_c2  BOOLEAN,
     label_10d_5pct_c2  BOOLEAN,
-    label_10d_10pct_c2 BOOLEAN
+    label_10d_10pct_c2 BOOLEAN,
+    label_3d_3pct_clean   BOOLEAN,
+    label_3d_5pct_clean   BOOLEAN,
+    label_3d_10pct_clean  BOOLEAN,
+    label_5d_3pct_clean   BOOLEAN,
+    label_5d_5pct_clean   BOOLEAN,
+    label_5d_10pct_clean  BOOLEAN,
+    label_10d_3pct_clean  BOOLEAN,
+    label_10d_5pct_clean  BOOLEAN,
+    label_10d_10pct_clean BOOLEAN,
+    label_first_up_3pct   BOOLEAN,
+    label_first_up_5pct   BOOLEAN,
+    label_first_up_10pct  BOOLEAN
 );
 """
 
@@ -249,6 +273,30 @@ ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct_c2 BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct_c2 BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct_c2 BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct_c2 BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_3pct_clean   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_5pct_clean   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_10pct_clean  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_3pct_clean   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_5pct_clean   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct_clean  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct_clean  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct_clean  BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct_clean BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_up_3pct   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_up_5pct   BOOLEAN;
+ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_up_10pct  BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_3d_3pct_clean   BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_3d_5pct_clean   BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_3d_10pct_clean  BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_5d_3pct_clean   BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_5d_5pct_clean   BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_5d_10pct_clean  BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_3pct_clean  BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_5pct_clean  BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_10pct_clean BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_3pct   BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_5pct   BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_10pct  BOOLEAN;
 """
 
 
