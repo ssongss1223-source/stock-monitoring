@@ -30,7 +30,7 @@ _PCT_TARGETS = [3, 5, 10]
 _C2_COMBOS = [(3, 3), (3, 5), (5, 3), (5, 5), (5, 10), (10, 3), (10, 5), (10, 10)]
 
 # clean 라벨: 목표 달성 + 달성 전 낙폭이 임계치 이내 (R:R 비례)
-_DD_THRESH = {3: -0.02, 5: -0.03, 10: -0.05}
+_DD_THRESH = {3: -0.015, 5: -0.025, 10: -0.04}
 
 _LABEL_COLS = [
     "signal_date", "ticker", "entry_price",
@@ -41,7 +41,7 @@ _LABEL_COLS = [
     *[f"label_{d}d_{p}pct" for d in _HOLD_DAYS for p in _PCT_TARGETS],
     *[f"label_{d}d_{p}pct_c2" for d, p in _C2_COMBOS],
     *[f"label_{d}d_{p}pct_clean" for d in _HOLD_DAYS for p in _PCT_TARGETS],
-    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
+    *[f"label_first_{d}d_{p}pct" for d in _HOLD_DAYS for p in _PCT_TARGETS],
 ]
 
 
@@ -101,19 +101,21 @@ def label_one(df_daily: pd.DataFrame, signal_date: str | date) -> dict | None:
             else:
                 min_low = float(w.iloc[:hit_idx + 1]["Low"].min())
                 max_dd = (min_low - entry_price) / entry_price
-                result[f"label_{d}d_{p}pct_clean"] = int(max_dd >= _DD_THRESH[p])
+                result[f"label_{d}d_{p}pct_clean"] = int(max_dd >= _DD_THRESH[d])
 
-    for p, dd in [(3, -0.02), (5, -0.03), (10, -0.05)]:
-        up_tgt   = entry_price * (1 + p / 100)
-        down_tgt = entry_price * (1 + dd)
-        val = 0
-        for i in range(len(window)):
-            row = window.iloc[i]
-            if row["Close"] >= up_tgt:
-                val = 1; break
-            if row["Low"] <= down_tgt:
-                val = 0; break
-        result[f"label_first_up_{p}pct"] = val
+    for d in _HOLD_DAYS:
+        w = window.iloc[:d]
+        for p in _PCT_TARGETS:
+            up_tgt   = entry_price * (1 + p / 100)
+            down_tgt = entry_price * (1 + _DD_THRESH[d])
+            val = 0
+            for i in range(len(w)):
+                row = w.iloc[i]
+                if row["Close"] >= up_tgt:
+                    val = 1; break
+                if row["Low"] <= down_tgt:
+                    val = 0; break
+            result[f"label_first_{d}d_{p}pct"] = val
 
     return result
 

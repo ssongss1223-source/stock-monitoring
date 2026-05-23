@@ -32,16 +32,12 @@ _UD_OVERLAP = {
 
 _LABEL_COLS = [
     "entry_price",
-    "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
-    "label_5d_3pct", "label_5d_5pct", "label_5d_10pct",
-    "label_10d_3pct", "label_10d_5pct", "label_10d_10pct",
-    "label_3d_3pct_c2", "label_3d_5pct_c2",
-    "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
-    "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
     "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
     "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
     "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
-    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
+    "label_first_3d_3pct", "label_first_3d_5pct", "label_first_3d_10pct",
+    "label_first_5d_3pct", "label_first_5d_5pct", "label_first_5d_10pct",
+    "label_first_10d_3pct", "label_first_10d_5pct", "label_first_10d_10pct",
 ]
 
 
@@ -240,7 +236,7 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
                 vol_score_approx, grade_approx,
                 {label_sel}
             FROM universe_daily
-            WHERE label_3d_3pct IS NOT NULL
+            WHERE label_3d_3pct_clean IS NOT NULL
         """).df()
 
         # 2. backtest_labels LEFT JOIN — max_close_* (Return@K 평가 메트릭용, 약 8% 행만 채워짐)
@@ -337,11 +333,8 @@ def main() -> None:
     print(f"\n라벨 positive rate:")
 
     label_groups = [
-        ("basic 9",     [f"label_{d}d_{p}pct"       for d in [3, 5, 10] for p in [3, 5, 10]]),
-        ("c2 8",        [f"label_{d}d_{p}pct_c2"    for d in [3, 5, 10] for p in [3, 5, 10]
-                         if not (d == 3 and p == 10)]),
-        ("clean 9",     [f"label_{d}d_{p}pct_clean" for d in [3, 5, 10] for p in [3, 5, 10]]),
-        ("first_touch", [f"label_first_up_{p}pct"   for p in [3, 5, 10]]),
+        ("clean 9",       [f"label_{d}d_{p}pct_clean" for d in [3, 5, 10] for p in [3, 5, 10]]),
+        ("first_touch 9", [f"label_first_{d}d_{p}pct" for d in [3, 5, 10] for p in [3, 5, 10]]),
     ]
     for group_name, cols in label_groups:
         print(f"  [{group_name}]")

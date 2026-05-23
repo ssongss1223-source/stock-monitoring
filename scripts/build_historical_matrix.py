@@ -44,7 +44,9 @@ _LABEL_COLS = [
     "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
     "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
     "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
-    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
+    "label_first_3d_3pct", "label_first_3d_5pct", "label_first_3d_10pct",
+    "label_first_5d_3pct", "label_first_5d_5pct", "label_first_5d_10pct",
+    "label_first_10d_3pct", "label_first_10d_5pct", "label_first_10d_10pct",
 ]
 
 

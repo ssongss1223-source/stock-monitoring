@@ -39,16 +39,12 @@ from sklearn.linear_model import LogisticRegression
 import joblib
 
 _TARGETS = [
-    "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
-    "label_5d_3pct", "label_5d_5pct", "label_5d_10pct",
-    "label_10d_3pct", "label_10d_5pct", "label_10d_10pct",
-    "label_3d_3pct_c2", "label_3d_5pct_c2",
-    "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
-    "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
     "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
     "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
     "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
-    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
+    "label_first_3d_3pct", "label_first_3d_5pct", "label_first_3d_10pct",
+    "label_first_5d_3pct", "label_first_5d_5pct", "label_first_5d_10pct",
+    "label_first_10d_3pct", "label_first_10d_5pct", "label_first_10d_10pct",
 ]
 
 _DROP = {
