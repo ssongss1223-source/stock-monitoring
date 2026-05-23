@@ -45,10 +45,14 @@ _TARGETS = [
     "label_3d_3pct_c2", "label_3d_5pct_c2",
     "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
     "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
+    "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
+    "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
+    "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
+    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
 ]
 
 _DROP = {
-    "signal_date", "ticker", "entry_price",
+    "signal_date", "ticker", "entry_price", "close",
     "max_close_3d", "max_close_5d", "max_close_10d",
     "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
     "return_3d", "return_5d", "return_10d",
@@ -213,23 +217,34 @@ def main() -> None:
     out_dir = Path("data/models")
     out_dir.mkdir(exist_ok=True)
 
-    # Step 5: OOF 저장용 DataFrame 기반 컬럼 준비
-    oof_df = df[["signal_date", "ticker", "entry_price",
-                 "max_close_3d", "max_close_5d", "max_close_10d"]].copy()
+    # Step 5: OOF 저장용 DataFrame 기반 컬럼 준비 (max_close_* 없을 수 있음)
+    oof_cols = ["signal_date", "ticker", "entry_price"]
+    for col in ["max_close_3d", "max_close_5d", "max_close_10d"]:
+        if col in df.columns:
+            oof_cols.append(col)
+    oof_df = df[oof_cols].copy()
     for t in _TARGETS:
-        oof_df[t] = df[t]
+        if t in df.columns:
+            oof_df[t] = df[t]
 
     summary: list[dict] = []
     model_meta: dict[str, dict] = {}  # {label_key: {best, precision@K, ...}}
 
     for target in _TARGETS:
         label_key = target.replace("label_", "")          # "3d_5pct"
-        hold_period = label_key.split("_")[0]              # "3d"
-        max_close_col = f"max_close_{hold_period}"          # "max_close_3d"
+        if label_key.startswith("first_"):
+            max_close_col = None
+        else:
+            hold_period = label_key.split("_")[0]          # "3d"
+            candidate = f"max_close_{hold_period}"
+            max_close_col = candidate if candidate in df.columns else None
 
         y = df[target]
-        # 수익률: max_close / entry_price - 1 (entry_price=0 방어)
-        max_return = (df[max_close_col] / df["entry_price"].replace(0, np.nan) - 1)
+        # 수익률: max_close / entry_price - 1 (first_touch 또는 max_close 없으면 None)
+        max_return = (
+            (df[max_close_col] / df["entry_price"].replace(0, np.nan) - 1)
+            if max_close_col else None
+        )
 
         print(f"{'='*62}")
         print(f"  {target}  (positive={y.mean():.1%})")
@@ -309,10 +324,13 @@ def main() -> None:
             print(f"  {'모델':<12s} Prec@{k:<3d} Return@{k}")
             for name, oof in model_oofs.items():
                 prec = _precision_at_k(y, oof, k)
-                ret  = _return_at_k(max_return, oof, k)
                 row[f"{name}_prec@{k}"] = prec
-                row[f"{name}_ret@{k}"]  = ret
-                print(f"  {name:<12s} {prec:>6.1%}   {ret:>+7.1%}")
+                if max_return is not None:
+                    ret = _return_at_k(max_return, oof, k)
+                    row[f"{name}_ret@{k}"] = ret
+                    print(f"  {name:<12s} {prec:>6.1%}   {ret:>+7.1%}")
+                else:
+                    print(f"  {name:<12s} {prec:>6.1%}   N/A")
             print()
 
         # ── Step 10: 라벨별 최고 모델 선택 (Precision@20 기준) ──────────

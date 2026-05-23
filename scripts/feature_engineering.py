@@ -1,24 +1,11 @@
 """
-ML 피처 엔지니어링 — signal_history × ohlcv_daily × backtest_labels → feature_matrix.parquet
+ML 피처 엔지니어링 — universe_daily → feature_matrix.parquet
 
-v1 피처 (27개):
-  signal_history: vol_score, total_score, grade_S/A/B, trend_score, pattern_score, risk_reward
-  pattern 원-핫 (4개), scoring_version 원-핫 (2개)
-  ohlcv_daily: per, pbr, div_yield, foreign_exh_rate, short_ratio, volume, amount, market_cap, turnover_rate
-  rolling: foreign_net_5d, inst_net_5d, log_avg_volume_20d, hist_volatility_20d, avg_foreign_exh_rate_20d
-
-v2 추가 피처 (~28개):
-  MA 기반: close_to_20ma_ratio, close_to_60ma_ratio, close_to_52w_high
-           close_to_5ma_ratio, ma_cross_5_20
-  기술적:  rsi_14, bb_position, obv_slope_5d
-  캔들:    high_low_ratio, body_ratio
-  공매도:  short_balance_ratio, short_volume_ratio_5d, short_balance_change_5d
-  거래량:  volume_surge_ratio, amount_surge_ratio
-  모멘텀:  price_momentum_3d, price_momentum_10d
-  수급:    foreign_net_20d, inst_net_20d, combined_net_5d, foreign_exh_change_5d
-  재무:    roe_proxy
-  시장:    kospi_return_20d, kospi_return_5d, kospi_above_ma60,
-           market_volatility_20d, relative_strength_5d
+Source: universe_daily (2024-01 ~, 약 215k+ 행)
+  - pre-computed 피처: MA비율(4), RSI, BB, 변동성, 52w고점비율, 수급(5d/20d), 코스피, vol_score
+  - 라벨 29개: basic 9 + c2 8 + clean 9 + first_touch 3
+  - 보조 피처: ohlcv_daily → OBV slope, 가격모멘텀, 캔들, 공매도, 거래대금 surge
+  - 시장 피처: kospi_above_ma60, market_volatility_20d
 
 Usage:
     python scripts/feature_engineering.py
@@ -28,7 +15,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 
@@ -39,9 +25,24 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from data.db import get_conn
 
-_HOLD_DAYS = [3, 5, 10]
-_TARGET_PCTS = [3, 5, 10]
-_PATTERNS = ["cup_handle", "falling_box_breakout", "triangle_convergence", "bb_squeeze"]
+_UD_OVERLAP = {
+    "close_to_52w_high", "bb_position", "rsi_14", "foreign_net_20d",
+    "close_to_20ma_ratio", "close_to_60ma_ratio", "close_to_5ma_ratio",
+}
+
+_LABEL_COLS = [
+    "entry_price",
+    "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
+    "label_5d_3pct", "label_5d_5pct", "label_5d_10pct",
+    "label_10d_3pct", "label_10d_5pct", "label_10d_10pct",
+    "label_3d_3pct_c2", "label_3d_5pct_c2",
+    "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
+    "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
+    "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
+    "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
+    "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
+    "label_first_up_3pct", "label_first_up_5pct", "label_first_up_10pct",
+]
 
 
 def _parse_args() -> argparse.Namespace:
@@ -61,25 +62,6 @@ def _parse_args() -> argparse.Namespace:
         help="출력 경로 (기본: data/feature_matrix.parquet)",
     )
     return p.parse_args()
-
-
-def _parse_features_col(series: pd.Series) -> pd.DataFrame:
-    """signal_history.features JSON 컬럼 → 개별 컬럼."""
-    def _parse(raw) -> dict:
-        if isinstance(raw, str):
-            f = json.loads(raw)
-        elif isinstance(raw, dict):
-            f = raw
-        else:
-            f = {}
-        return {
-            "total_score": f.get("total_score", 0),
-            "trend_score": f.get("trend_score", 0),
-            "pattern_score": f.get("pattern_score", 0),
-            "risk_reward": f.get("risk_reward", 0.0),
-            "pattern": f.get("pattern"),
-        }
-    return series.apply(_parse).apply(pd.Series)
 
 
 def _build_v2_ohlcv_features(conn) -> pd.DataFrame:
@@ -244,104 +226,55 @@ def _build_market_features(conn) -> pd.DataFrame:
 def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     conn = get_conn(read_only=True)
     try:
-        # 1. signal_history
-        df_sig = conn.execute(
-            "SELECT signal_date, ticker, vol_score, grade, features, scoring_version FROM signal_history"
-        ).df()
-
-        # 2. ohlcv_daily: signal_date 기준 스냅샷 + rolling 5일 합산
-        df_roll = conn.execute("""
+        # 1. universe_daily — pre-computed 피처 + 29개 라벨 (라벨 있는 행만)
+        label_sel = ", ".join(_LABEL_COLS)
+        df = conn.execute(f"""
             SELECT
-                ticker, date,
-                volume, amount, market_cap,
-                per, pbr, div_yield, foreign_exh_rate, short_ratio,
-                CASE WHEN market_cap > 0 THEN amount / market_cap ELSE NULL END AS turnover_rate,
-                SUM(foreign_net) OVER (
-                    PARTITION BY ticker ORDER BY date
-                    ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
-                ) AS foreign_net_5d,
-                SUM(inst_net) OVER (
-                    PARTITION BY ticker ORDER BY date
-                    ROWS BETWEEN 4 PRECEDING AND CURRENT ROW
-                ) AS inst_net_5d
-            FROM ohlcv_daily
+                date AS signal_date, ticker, close, volume, market_cap,
+                per, pbr, turnover_rate,
+                ma5_ratio, ma20_ratio, ma60_ratio, ma120_ratio,
+                rsi_14, bb_position, hist_vol_20d, close_to_52w_high,
+                foreign_net_5d, inst_net_5d, foreign_net_20d, volume_surge_5d,
+                kospi_ret_5d  AS kospi_return_5d,
+                kospi_ret_20d AS kospi_return_20d,
+                vol_score_approx, grade_approx,
+                {label_sel}
+            FROM universe_daily
+            WHERE label_3d_3pct IS NOT NULL
         """).df()
 
-        # 3. ticker 특성 피처 (종목별 특성 인코딩)
-        df_ticker = conn.execute("""
-            WITH ret AS (
-                SELECT ticker, date, volume, foreign_exh_rate,
-                       close / NULLIF(LAG(close, 1) OVER (PARTITION BY ticker ORDER BY date), 0) - 1
-                           AS daily_ret
-                FROM ohlcv_daily
-            )
-            SELECT ticker, date,
-                   LN(NULLIF(AVG(volume) OVER w, 0))          AS log_avg_volume_20d,
-                   STDDEV_POP(daily_ret) OVER w * SQRT(252)    AS hist_volatility_20d,
-                   AVG(foreign_exh_rate) OVER w                AS avg_foreign_exh_rate_20d
-            FROM ret
-            WINDOW w AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING)
+        # 2. backtest_labels LEFT JOIN — max_close_* (Return@K 평가 메트릭용, 약 8% 행만 채워짐)
+        df_bl = conn.execute("""
+            SELECT signal_date, ticker,
+                   max_close_3d, max_close_5d, max_close_10d,
+                   max_drawdown_3d, max_drawdown_5d, max_drawdown_10d,
+                   return_3d, return_5d, return_10d
+            FROM backtest_labels
         """).df()
 
-        # 4. 업종 (ticker_master.sector) — 데이터 없으면 빈 DataFrame
-        df_sector = conn.execute(
-            "SELECT ticker, sector FROM ticker_master WHERE sector IS NOT NULL"
-        ).df()
-
-        # 5. backtest_labels
-        df_lbl = conn.execute("SELECT * FROM backtest_labels").df()
-
-        # 6. v2 피처
+        # 3. v2 기술 피처
         df_v2 = _build_v2_ohlcv_features(conn)
+
+        # 4. 시장 피처 (kospi_above_ma60, market_volatility_20d 추가)
         df_mkt = _build_market_features(conn)
     finally:
         conn.close()
 
-    if df_sig.empty:
-        print("signal_history가 비어 있습니다.")
+    if df.empty:
+        print("universe_daily에 라벨 있는 행이 없습니다.")
         return pd.DataFrame()
-
-    if df_lbl.empty:
-        print("backtest_labels가 비어 있습니다. 먼저 labeler를 실행하세요.")
-        return pd.DataFrame()
-
-    # --- features JSON 파싱 ---
-    feat_cols = _parse_features_col(df_sig["features"])
-    df_sig = pd.concat([df_sig.drop(columns=["features"]), feat_cols], axis=1)
 
     # --- 날짜 타입 통일 ---
-    df_sig["signal_date"] = pd.to_datetime(df_sig["signal_date"])
-    df_roll["date"] = pd.to_datetime(df_roll["date"])
-    df_lbl["signal_date"] = pd.to_datetime(df_lbl["signal_date"])
-
-    # --- ticker 특성 피처 날짜 타입 통일 ---
-    df_ticker["date"] = pd.to_datetime(df_ticker["date"])
-
-    # --- v2 피처 날짜 타입 통일 ---
+    df["signal_date"] = pd.to_datetime(df["signal_date"])
+    df_bl["signal_date"] = pd.to_datetime(df_bl["signal_date"])
     df_v2["date"] = pd.to_datetime(df_v2["date"])
     df_mkt["date"] = pd.to_datetime(df_mkt["date"])
 
-    # --- signal_history × ohlcv_daily JOIN ---
-    df = df_sig.merge(
-        df_roll,
-        left_on=["ticker", "signal_date"],
-        right_on=["ticker", "date"],
-        how="inner",
-    ).drop(columns=["date"])
+    # --- backtest_labels LEFT JOIN (Return@K 메트릭용 — 없으면 NaN) ---
+    df = df.merge(df_bl, on=["ticker", "signal_date"], how="left")
 
-    # --- ticker 특성 피처 JOIN ---
-    df = df.merge(
-        df_ticker,
-        left_on=["ticker", "signal_date"],
-        right_on=["ticker", "date"],
-        how="left",
-    ).drop(columns=["date"])
-
-    # --- 업종 JOIN (데이터 있을 때만) ---
-    if not df_sector.empty:
-        df = df.merge(df_sector, on="ticker", how="left")
-
-    # --- v2 OHLCV 피처 JOIN ---
+    # --- v2 피처 JOIN (universe_daily와 중복 컬럼 제거 후) ---
+    df_v2 = df_v2.drop(columns=[c for c in _UD_OVERLAP if c in df_v2.columns])
     df = df.merge(
         df_v2,
         left_on=["ticker", "signal_date"],
@@ -349,7 +282,8 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
         how="left",
     ).drop(columns=["date"], errors="ignore")
 
-    # --- v2 시장 피처 JOIN ---
+    # --- 시장 피처 JOIN (kospi_return_5d/20d는 이미 universe_daily에 있으므로 제외) ---
+    df_mkt = df_mkt.drop(columns=["kospi_return_5d", "kospi_return_20d"], errors="ignore")
     df = df.merge(
         df_mkt,
         left_on="signal_date",
@@ -358,64 +292,28 @@ def build_feature_matrix(min_volume: int, min_amount: float) -> pd.DataFrame:
     ).drop(columns=["date"], errors="ignore")
 
     # --- 파생 피처 ---
-    # 상대강도 = 종목 5일 수익률 - KOSPI 5일 수익률
     if "stock_ret_5d" in df.columns and "kospi_return_5d" in df.columns:
         df["relative_strength_5d"] = df["stock_ret_5d"] - df["kospi_return_5d"]
-        df = df.drop(columns=["stock_ret_5d"])  # kospi_return_5d는 독립 피처로 유지
-    # 외국인+기관 합산 5일 수급
+        df = df.drop(columns=["stock_ret_5d"])
     if "foreign_net_5d" in df.columns and "inst_net_5d" in df.columns:
         df["combined_net_5d"] = df["foreign_net_5d"] + df["inst_net_5d"]
 
-    # --- 유동성 필터 (NULL은 필터 통과, 실값이 있을 때만 임계값 적용) ---
+    # --- 유동성 필터 (close * volume = amount proxy) ---
     before = len(df)
     vol_ok = df["volume"].fillna(0) >= min_volume
-    amt_ok = df["amount"].isna() | (df["amount"] >= min_amount)
+    amt_proxy = df["close"] * df["volume"]
+    amt_ok = amt_proxy.isna() | (amt_proxy >= min_amount)
     df = df[vol_ok & amt_ok]
-    null_amt = int(df["amount"].isna().sum())
-    print(f"유동성 필터: {before}건 → {len(df)}건 "
-          f"(volume≥{min_volume:,}, amount≥{min_amount:,.0f}원)"
-          + (f"  ※ amount NULL {null_amt}건 (backfill 필요)" if null_amt else ""))
-
-    # --- backtest_labels JOIN ---
-    df = df.merge(df_lbl, on=["ticker", "signal_date"], how="inner")
-    print(f"backtest_labels JOIN 후: {len(df)}건")
+    print(f"유동성 필터: {before:,}건 → {len(df):,}건 "
+          f"(volume≥{min_volume:,}, amount_proxy≥{min_amount:,.0f}원)")
 
     if df.empty:
         return df
 
     # --- grade 원-핫 ---
     for g in ["S", "A", "B"]:
-        df[f"grade_{g}"] = (df["grade"] == g).astype(int)
-    df = df.drop(columns=["grade"])
-
-    # --- pattern 원-핫 ---
-    for pat in _PATTERNS:
-        df[f"pattern_{pat}"] = (df["pattern"] == pat).astype(int)
-    df = df.drop(columns=["pattern"])
-
-    # --- scoring_version 원-핫 ---
-    for v in ["live_v1", "live_v2"]:
-        df[f"sv_{v}"] = (df["scoring_version"] == v).astype(int)
-    df = df.drop(columns=["scoring_version"])
-
-    # --- 업종 원-핫 (데이터 있을 때만) ---
-    if "sector" in df.columns:
-        sector_dummies = pd.get_dummies(df["sector"], prefix="sector").astype(int)
-        df = pd.concat([df.drop(columns=["sector"]), sector_dummies], axis=1)
-
-    # --- 라벨 9개 동적 생성 ---
-    for d in _HOLD_DAYS:
-        for pct in _TARGET_PCTS:
-            df[f"label_{d}d_{pct}pct"] = (
-                df[f"max_close_{d}d"] >= df["entry_price"] * (1 + pct / 100)
-            ).astype(int)
-
-    # --- c2 라벨 8개 (3d_10pct 제외 — 달성률 2.9%) ---
-    _C2_COMBOS = [(3, 3), (3, 5), (5, 3), (5, 5), (5, 10), (10, 3), (10, 5), (10, 10)]
-    for d, pct in _C2_COMBOS:
-        col = f"c2_{d}d_{pct}pct"
-        if col in df.columns:
-            df[f"label_{d}d_{pct}pct_c2"] = (df[col] >= 2).astype(int)
+        df[f"grade_{g}"] = (df["grade_approx"] == g).astype(int)
+    df = df.drop(columns=["grade_approx"])
 
     return df
 
@@ -435,11 +333,23 @@ def main() -> None:
     df.to_parquet(out, index=False)
 
     print(f"\n저장 완료: {out}  shape={df.shape}")
+    print(f"기간: {df['signal_date'].min().date()} ~ {df['signal_date'].max().date()}")
     print(f"\n라벨 positive rate:")
-    print(f"{'':16s} {'3일':>7s} {'5일':>7s} {'10일':>7s}")
-    for pct in _TARGET_PCTS:
-        rates = [f"{df[f'label_{d}d_{pct}pct'].mean():.1%}" for d in _HOLD_DAYS]
-        print(f"  +{pct}% 달성:      {rates[0]:>7s} {rates[1]:>7s} {rates[2]:>7s}")
+
+    label_groups = [
+        ("basic 9",     [f"label_{d}d_{p}pct"       for d in [3, 5, 10] for p in [3, 5, 10]]),
+        ("c2 8",        [f"label_{d}d_{p}pct_c2"    for d in [3, 5, 10] for p in [3, 5, 10]
+                         if not (d == 3 and p == 10)]),
+        ("clean 9",     [f"label_{d}d_{p}pct_clean" for d in [3, 5, 10] for p in [3, 5, 10]]),
+        ("first_touch", [f"label_first_up_{p}pct"   for p in [3, 5, 10]]),
+    ]
+    for group_name, cols in label_groups:
+        print(f"  [{group_name}]")
+        for col in cols:
+            if col in df.columns:
+                rate = df[col].mean()
+                n = int(df[col].sum())
+                print(f"    {col:<32s} {rate:>6.1%}  (n={n:,})")
 
 
 if __name__ == "__main__":
