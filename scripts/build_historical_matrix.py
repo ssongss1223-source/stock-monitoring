@@ -294,7 +294,7 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
         return
 
     df_labels = pd.DataFrame(labeled_rows)
-    set_clause = ", ".join(f"ud.{col} = s.{col}" for col in _LABEL_COLS)
+    set_clause = ", ".join(f"{col} = s.{col}" for col in _LABEL_COLS)
 
     conn = get_conn()
     try:
