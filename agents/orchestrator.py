@@ -182,6 +182,10 @@ class Orchestrator:
                 await loop.run_in_executor(None, _insert_universe_daily)
             except Exception:
                 logger.exception("universe_daily INSERT 오류")
+            try:
+                await loop.run_in_executor(None, _insert_universe_features_daily)
+            except Exception:
+                logger.exception("universe_features_daily INSERT 오류")
         except Exception:
             logger.exception("데이터 수집 오류")
         elapsed = int(time.monotonic() - start)
@@ -703,6 +707,58 @@ def _update_universe_preds(date_str: str) -> None:
         logger.exception("universe_daily ML 예측 UPDATE 실패")
     finally:
         conn.close()
+
+
+def _insert_universe_features_daily() -> None:
+    """오늘 날짜의 파생 피처를 계산해 universe_features_daily에 INSERT OR REPLACE.
+    feature_engineering.py --mode build 와 동일 로직을 일별로 실행.
+    """
+    try:
+        from scripts.feature_engineering import (
+            _compute_all_features,
+            _build_market_features,
+            _add_derived_and_cross_sectional,
+            _save_features_to_db,
+        )
+    except ImportError:
+        logger.error("feature_engineering import 실패 — universe_features_daily 건너뜀")
+        return
+
+    conn_r = get_conn(read_only=True)
+    try:
+        today = conn_r.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()[0]
+        if today is None:
+            return
+        today_str = str(today)
+
+        df_all = _compute_all_features(conn_r)
+        df_mkt = _build_market_features(conn_r)
+        df_grade = conn_r.execute(
+            "SELECT date, ticker, grade_approx FROM universe_daily WHERE date = ?",
+            [today_str],
+        ).df()
+    finally:
+        conn_r.close()
+
+    import pandas as pd
+    df_all["date"] = pd.to_datetime(df_all["date"])
+    today_ts = pd.Timestamp(today_str)
+    df_today = df_all[df_all["date"] == today_ts].copy()
+
+    if df_today.empty:
+        logger.warning("universe_features_daily: 오늘 데이터 없음 (%s)", today_str)
+        return
+
+    df_today = _add_derived_and_cross_sectional(df_today, df_mkt)
+
+    df_grade["date"] = pd.to_datetime(df_grade["date"])
+    df_today = df_today.merge(df_grade, on=["date", "ticker"], how="left")
+    for g in ["S", "A", "B"]:
+        df_today[f"grade_{g}"] = (df_today.get("grade_approx") == g).astype("Int8")
+    df_today = df_today.drop(columns=["grade_approx"], errors="ignore")
+
+    _save_features_to_db(df_today)
+    logger.info("universe_features_daily INSERT 완료: %s %d건", today_str, len(df_today))
 
 
 def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:

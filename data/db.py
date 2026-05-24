@@ -145,6 +145,62 @@ CREATE TABLE IF NOT EXISTS macro_daily (
     sox     DOUBLE
 );
 
+CREATE TABLE IF NOT EXISTS universe_features_daily (
+    date   DATE    NOT NULL,
+    ticker VARCHAR NOT NULL,
+    PRIMARY KEY (date, ticker),
+
+    -- ── Section A: Layer3 학습용 v2 on-the-fly 피처 ──────────────────────
+    ma_cross_5_20          SMALLINT,   -- MA5 >= MA20 이면 1
+    obv_slope_5d           DOUBLE,
+    high_low_ratio         DOUBLE,
+    body_ratio             DOUBLE,
+    short_balance_ratio    DOUBLE,
+    short_volume_ratio_5d  DOUBLE,
+    short_balance_change_5d DOUBLE,
+    volume_surge_ratio     DOUBLE,
+    amount_surge_ratio     DOUBLE,
+    price_momentum_3d      DOUBLE,
+    price_momentum_10d     DOUBLE,
+    inst_net_20d           DOUBLE,
+    foreign_exh_change_5d  DOUBLE,
+    roe_proxy              DOUBLE,
+    relative_strength_5d   DOUBLE,
+    combined_net_5d        DOUBLE,
+    kospi_above_ma60       SMALLINT,
+    market_volatility_20d  DOUBLE,
+    grade_S                SMALLINT,
+    grade_A                SMALLINT,
+    grade_B                SMALLINT,
+
+    -- ── Section B: Tier 1 신규 피처 (Layer3 학습 포함) ───────────────────
+    bb_width               DOUBLE,
+    atr_14                 DOUBLE,
+    atr_ratio_60d          DOUBLE,
+    volume_zscore_20d      DOUBLE,
+    amount_zscore_20d      DOUBLE,
+    rs_20d                 DOUBLE,
+    rs_rank_pct            DOUBLE,   -- cross-sectional percentile rank
+    market_breadth         DOUBLE,   -- 당일 상승종목 비율 (전체 동일값)
+    breakout_distance_20d  DOUBLE,
+    box_tightness_20d      DOUBLE,
+
+    -- ── Section C: Layer2 패턴용 raw 피처 (DB 저장만, 학습 미포함) ────────
+    breakout_distance_60d  DOUBLE,
+    breakout_distance_120d DOUBLE,
+    range_80d_pct          DOUBLE,
+    distance_from_ma224    DOUBLE,
+    up_days_5d             SMALLINT, -- 최근 5일 중 상승일 수 (consecutive_up_days 근사)
+    gap_percent            DOUBLE,
+    opening_strength       DOUBLE,
+    intraday_close_strength DOUBLE,
+    recovery_from_low_80d  DOUBLE,
+    volume_acceleration    DOUBLE,   -- avg_vol_5d / avg_vol_20d
+    volume_dryup_ratio     DOUBLE,   -- avg_vol_5d / avg_vol_60d
+    retracement_ratio      DOUBLE,
+    pullback_depth         DOUBLE
+);
+
 CREATE TABLE IF NOT EXISTS universe_daily (
     date              DATE,
     ticker            VARCHAR,
@@ -238,6 +294,55 @@ def get_conn(read_only: bool = False) -> duckdb.DuckDBPyConnection:
 
 
 _MIGRATIONS = """
+CREATE TABLE IF NOT EXISTS universe_features_daily (
+    date   DATE    NOT NULL,
+    ticker VARCHAR NOT NULL,
+    PRIMARY KEY (date, ticker),
+    ma_cross_5_20          SMALLINT,
+    obv_slope_5d           DOUBLE,
+    high_low_ratio         DOUBLE,
+    body_ratio             DOUBLE,
+    short_balance_ratio    DOUBLE,
+    short_volume_ratio_5d  DOUBLE,
+    short_balance_change_5d DOUBLE,
+    volume_surge_ratio     DOUBLE,
+    amount_surge_ratio     DOUBLE,
+    price_momentum_3d      DOUBLE,
+    price_momentum_10d     DOUBLE,
+    inst_net_20d           DOUBLE,
+    foreign_exh_change_5d  DOUBLE,
+    roe_proxy              DOUBLE,
+    relative_strength_5d   DOUBLE,
+    combined_net_5d        DOUBLE,
+    kospi_above_ma60       SMALLINT,
+    market_volatility_20d  DOUBLE,
+    grade_S                SMALLINT,
+    grade_A                SMALLINT,
+    grade_B                SMALLINT,
+    bb_width               DOUBLE,
+    atr_14                 DOUBLE,
+    atr_ratio_60d          DOUBLE,
+    volume_zscore_20d      DOUBLE,
+    amount_zscore_20d      DOUBLE,
+    rs_20d                 DOUBLE,
+    rs_rank_pct            DOUBLE,
+    market_breadth         DOUBLE,
+    breakout_distance_20d  DOUBLE,
+    box_tightness_20d      DOUBLE,
+    breakout_distance_60d  DOUBLE,
+    breakout_distance_120d DOUBLE,
+    range_80d_pct          DOUBLE,
+    distance_from_ma224    DOUBLE,
+    up_days_5d             SMALLINT,
+    gap_percent            DOUBLE,
+    opening_strength       DOUBLE,
+    intraday_close_strength DOUBLE,
+    recovery_from_low_80d  DOUBLE,
+    volume_acceleration    DOUBLE,
+    volume_dryup_ratio     DOUBLE,
+    retracement_ratio      DOUBLE,
+    pullback_depth         DOUBLE
+);
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS per             DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS pbr             DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS eps             BIGINT;

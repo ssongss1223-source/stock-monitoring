@@ -1,6 +1,9 @@
 #!/bin/bash
 # 파이프라인 진행상황 Telegram 알림 모니터
 # 사용: nohup bash /opt/stock-monitor/scripts/notify_pipeline.sh > /tmp/notify.log 2>&1 &
+#
+# 마커 순서: RELABEL_DONE → BUILD_DONE → TRAIN_DONE
+# 각 phase 시작 후 1시간마다 진행 알림 전송
 
 BOT_TOKEN="$(grep TELEGRAM_BOT_TOKEN /opt/stock-monitor/.env | cut -d= -f2)"
 CHAT_ID="$(grep TELEGRAM_CHAT_ID /opt/stock-monitor/.env | cut -d= -f2)"
@@ -13,51 +16,72 @@ send() {
 }
 
 send "[파이프라인 시작됨] $(date '+%H:%M KST')
-1단계: 재라벨링 진행 중 (216,938행, 청크 체크포인트 20,000행)
-2단계: feature_engineering 대기
-3단계: 학습 (18 라벨, 라벨별 체크포인트) 대기"
+1단계: 재라벨링 (건너뜀 or 진행 중)
+2단계: 피처 빌드 (universe_features_daily 백필, 3~4시간 예상)
+3단계: 모델 학습 (18 라벨, ~21시간 예상)"
 
 RELABEL_DONE=0
-FEAT_DONE=0
+BUILD_DONE=0
 TRAIN_DONE=0
-LAST_HOUR=$(date +%s)
-TRAIN_START=0
+
+LAST_HOURLY=$(date +%s)
+CURRENT_PHASE_START=$(date +%s)
+CURRENT_PHASE="relabel"
 
 while true; do
     sleep 30
+    NOW=$(date +%s)
 
-    if grep -q "^RELABEL_DONE" "$LOG" && [ $RELABEL_DONE -eq 0 ]; then
+    # ── 1단계: 재라벨링 완료 감지 ──────────────────────────────────────
+    if grep -q "^RELABEL_DONE" "$LOG" 2>/dev/null && [ $RELABEL_DONE -eq 0 ]; then
         RELABEL_DONE=1
-        ELAPSED=$(grep "라벨 UPDATE 완료" "$LOG" | tail -1)
+        CURRENT_PHASE="build"
+        CURRENT_PHASE_START=$NOW
+        LAST_HOURLY=$NOW
         send "[1/3 완료] 재라벨링 완료 $(date '+%H:%M')
-→ feature_engineering 시작 중
-$ELAPSED"
+→ 피처 빌드 시작 (universe_features_daily 백필 중)"
     fi
 
-    if grep -q "^FEAT_DONE" "$LOG" && [ $FEAT_DONE -eq 0 ]; then
-        FEAT_DONE=1
-        TRAIN_START=$(date +%s)
-        send "[2/3 완료] Feature engineering 완료 $(date '+%H:%M')
+    # ── 2단계: 피처 빌드 완료 감지 ─────────────────────────────────────
+    if grep -q "^BUILD_DONE" "$LOG" 2>/dev/null && [ $BUILD_DONE -eq 0 ]; then
+        BUILD_DONE=1
+        CURRENT_PHASE="train"
+        CURRENT_PHASE_START=$NOW
+        LAST_HOURLY=$NOW
+        ELAPSED_BUILD=$(( (NOW - CURRENT_PHASE_START) / 60 ))
+        send "[2/3 완료] 피처 빌드 완료 $(date '+%H:%M')
+소요: ${ELAPSED_BUILD}분
 → 모델 학습 시작 (18 라벨, 예상 ~21시간)"
     fi
 
-    if grep -q "^TRAIN_DONE" "$LOG" && [ $TRAIN_DONE -eq 0 ]; then
+    # ── 3단계: 학습 완료 감지 ───────────────────────────────────────────
+    if grep -q "^TRAIN_DONE" "$LOG" 2>/dev/null && [ $TRAIN_DONE -eq 0 ]; then
         TRAIN_DONE=1
-        ELAPSED_H=$(( ($(date +%s) - TRAIN_START) / 3600 ))
-        ELAPSED_M=$(( (($(date +%s) - TRAIN_START) % 3600) / 60 ))
+        ELAPSED_TRAIN_H=$(( (NOW - CURRENT_PHASE_START) / 3600 ))
+        ELAPSED_TRAIN_M=$(( ((NOW - CURRENT_PHASE_START) % 3600) / 60 ))
         send "[3/3 완료] 모델 학습 완료! $(date '+%H:%M')
-전체 파이프라인 종료 (학습 소요: ${ELAPSED_H}시간 ${ELAPSED_M}분)"
+학습 소요: ${ELAPSED_TRAIN_H}시간 ${ELAPSED_TRAIN_M}분
+전체 파이프라인 종료"
         exit 0
     fi
 
-    NOW=$(date +%s)
-    if [ $FEAT_DONE -eq 1 ] && [ $TRAIN_DONE -eq 0 ] && [ $(( NOW - LAST_HOUR )) -ge 3600 ]; then
-        LAST_HOUR=$NOW
-        ELAPSED_H=$(( (NOW - TRAIN_START) / 3600 ))
-        ELAPSED_M=$(( ((NOW - TRAIN_START) % 3600) / 60 ))
-        LAST_LOG=$(grep -E "체크포인트|label_" "$LOG" | tail -3 | tr '\n' ' | ')
-        send "[학습 진행 중] $(date '+%H:%M')
+    # ── 시간당 진행 알림 (build 또는 train phase 진행 중) ──────────────
+    if [ $(( NOW - LAST_HOURLY )) -ge 3600 ]; then
+        LAST_HOURLY=$NOW
+        ELAPSED_H=$(( (NOW - CURRENT_PHASE_START) / 3600 ))
+        ELAPSED_M=$(( ((NOW - CURRENT_PHASE_START) % 3600) / 60 ))
+
+        if [ "$CURRENT_PHASE" = "build" ]; then
+            LAST_LOG=$(tail -3 "$LOG" 2>/dev/null | tr '\n' ' | ')
+            send "[빌드 진행 중] $(date '+%H:%M')
+경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
+최근 로그: $LAST_LOG"
+
+        elif [ "$CURRENT_PHASE" = "train" ]; then
+            LAST_LOG=$(grep -E "체크포인트|label_" "$LOG" 2>/dev/null | tail -3 | tr '\n' ' | ')
+            send "[학습 진행 중] $(date '+%H:%M')
 경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
 최근: $LAST_LOG"
+        fi
     fi
 done
