@@ -21,9 +21,7 @@ for arg in "$@"; do
 done
 
 echo "[$(date '+%H:%M')] git pull 시작"
-sudo chmod o+w "$APP_DIR/backtest" "$APP_DIR/scripts"
 git -C "$APP_DIR" pull
-sudo chmod o-w "$APP_DIR/backtest" "$APP_DIR/scripts"
 echo "[$(date '+%H:%M')] git pull 완료"
 
 # 기존 파이프라인 프로세스 확인
