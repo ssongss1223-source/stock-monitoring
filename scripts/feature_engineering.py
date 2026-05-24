@@ -457,6 +457,9 @@ def _build_and_save_parquet(df: pd.DataFrame, output_path: str,
         print("출력할 데이터 없음.")
         return
 
+    # build 모드: date 컬럼을 signal_date로 통일 (train_models.py 호환)
+    if "date" in df.columns and "signal_date" not in df.columns:
+        df = df.rename(columns={"date": "signal_date"})
     date_col = "signal_date" if "signal_date" in df.columns else "date"
 
     if mode == "train":
