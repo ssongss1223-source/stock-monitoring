@@ -1,71 +1,43 @@
 # Checkpoint
 
 ## Current Goal
-- 텔레그램 리포트 EV/day 기반 정렬 검증 + 신호 사후 검증 자동화
+- feature_engineering 진행 전 데이터 수집 현황 + 피처 구성 검토 후 train_models 재학습
 
 ## Current Status
-- 전체 로직 VM 배포 완료 (2026-05-17) — 서비스 정상 기동
-- 텔레그램 리포트 EV/day 정렬 + 4그룹 구조 로컬 적용 완료 (VM 미배포)
-- MCP 서버 3개 운영 중 (stock-db, vm-ssh, telegram)
+- **재라벨링 완료** (21:30 KST) — universe_daily 215,993행, 18 라벨 적용됨
+- **파이프라인 대기 중** — feature_engineering 자동 진행 차단됨 (사용자 요청)
+- **VM 정상** — 프로세스 없음, 다음 명령 대기
 
 ## Done
-- **VM 배포 완료** (git push → pull → macro_daily 테이블 생성 → 서비스 재시작) — 세션 40
-- **텔레그램 4그룹 리포트 구현** — 세션 41
-  - 대형주 단기/스윙, 중소형주 단기/스윙 top3씩 (총 12종목)
-  - 정렬: EV/day = [prob × gain% - (1-prob) × loss%] / days, tiebreak ML확률
-  - 단기(3d/5d), 스윙(10d) 라벨 기준 분류
-  - 같은 종목은 그룹 내 EV 최대 라벨 하나로만 표시 (중복 없음)
-- **버그 수정** — 세션 41
-  - `_pipeline`: market/mktcap_rank 세팅 순서 버그 수정 (저장 전에 먼저 세팅)
-  - `_get_mktcap_rank`: 비거래일 오류 방지 → DB 최근 거래일 기준 pykrx 조회
-  - `_get_rank_and_market()` 추가: rank + market dict 동시 반환
-  - `run_resend_last`: 전체 label_probs 복원 + DB xgb_prob fallback + fresh ML 추론
-- ATR 기반 동적 손절 + 시장국면 플래그 10개 + MacroStore — 세션 39~40
-- `BuySignal.label_probs` 필드 추가 (9개 라벨 확률 전체 보존)
+- **라벨 18개로 재설계** — clean 9 (`label_{d}d_{p}pct_clean`) + first-touch 9 (`label_first_{d}d_{p}pct`), `_DD_THRESH = {3:-0.015, 5:-0.025, 10:-0.04}`
+- **청크 체크포인트** — build_historical_matrix 20,000행 단위 parquet 저장/복구
+- **라벨별 체크포인트** — train_models 완료된 라벨 skip (OOF + summary 저장)
+- **인프라 개선 5종** — PYTHONPATH stock .bashrc, deploy_and_run.sh, notify_pipeline.sh git관리, 로그/체크포인트 /tmp→logs/, sudoers 권한 규칙
+- **재라벨링 완료** — 215,993건 UPDATE (945건 스킵), universe_daily 라벨 컬럼 정상 확인
 
 ## Remaining
-
-**[즉시] VM 배포 필요**
-- 세션 41 변경사항이 로컬에만 있음: `agents/report.py`, `agents/orchestrator.py`, `models/signals.py`
-- `git push` → VM `git pull` → 서비스 재시작
-
-**[확인 필요] signal_xgb_probs 비어있음**
-- 다음 정규 실행 후 확인: `SELECT label, COUNT(*), AVG(xgb_prob) FROM signal_xgb_probs GROUP BY label`
-
-**[검토 완료, 미구현] 라벨 정의 개선**
-- 현재: `label_Xd_Ypct = max_high_Xd >= entry × (1+Y%)` (장중 최고가 기준, 거래 불가능)
-- 제안: `label_Xd_Ypct = max_close_Xd >= entry × (1+Y%)` (기간 내 최고 종가 기준)
-- 구현 시 필요: `labeler.py` + `feature_engineering.py` + DB + 재학습 (27모델)
-- 우선순위: signal_xgb_probs 누적 후 실측 hit rate 확인 뒤 적용 권장
-
-**[중기] 신호 사후 검증 자동화**
-- `signal_history × ohlcv_daily` JOIN → n일 후 실제 수익률 자동 계산
-- `/verify N` 텔레그램 명령 구현
-
-**[보류]**
-- `sector_strong_ratio_70pct`: pykrx 차단으로 항상 False
-- PatternLearningResult DB 저장 미구현
-- sklearn 버전 불일치 (1.7.2 학습 → 1.8.0 실행) → 재학습 시 해소
+- **[검토 필요]** 데이터 수집 현황 점검 + feature_engineering.py 피처 구성 검토
+- **[실행 필요]** feature_engineering.py → train_models.py (18 라벨 × ~21시간)
+- docs/system.md 업데이트
 
 ## Risks / Blockers
-- sector 플래그 항상 False → 실질 최대 점수 12점 (공칭 13점)
-- 라벨이 max_high 기준이라 EV 산식의 gain% 가 실제 포착 가능 수익보다 낙관적
+- universe_daily 일부 컬럼 수집 안 됨: `market_cap`, `turnover_rate` = NULL
+- `pred_*` 컬럼 (기존 모델 예측값) = NaN — 재학습 전까지 NULL 유지
+- `grade_live`, `vol_score_live` = NULL (실시간 미수집)
 
 ## Next Actions
-1. **VM 배포**: `git push` → VM `git pull` → 서비스 재시작
-2. 정규 실행 후 텔레그램 리포트 + `signal_xgb_probs` 확인 (EV 정렬 실제 작동 여부)
-3. 사후 검증 자동화 구현 (`backtest/labeler.py --all-signals --save` 후 hit rate 측정)
+1. feature_engineering.py 피처 목록 검토 (데이터 수집 현황과 대조)
+2. 이상 없으면 `bash /opt/stock-monitor/scripts/deploy_and_run.sh --skip-relabel` 실행
+3. train_models 완료 후 AUC 결과 확인
 
 ## References
-- **리포트 형식 + EV 정렬**: `agents/report.py`
-- **파이프라인 + resend**: `agents/orchestrator.py`
-- **BuySignal 모델**: `models/signals.py`
-- **라벨 정의**: `backtest/labeler.py` (max_high 기준)
-- **라벨 파생**: `scripts/feature_engineering.py:409`
-- **라이브 ML 추론**: `agents/ml_scorer.py` (`score_all_labels()`)
-- **시스템 개요**: `docs/system.md`
 - **VM**: `instance-20260505-092414` (us-central1-a), `/opt/stock-monitor`
-- **스케줄**: 수집 07:00 UTC / 분석 21:00 UTC
+- **라벨 코드**: `backtest/labeler.py` (`_DD_THRESH = {3:-0.015, 5:-0.025, 10:-0.04}`)
+- **파이프라인 실행**: `bash /opt/stock-monitor/scripts/deploy_and_run.sh`
+- **로그**: `/opt/stock-monitor/logs/pipeline.log`
+- **체크포인트**: `/opt/stock-monitor/logs/labels_checkpoint.parquet`
+- **모델 저장**: `/opt/stock-monitor/data/models/`
+- **라벨 달성률 (18라벨 기준)**: 미확인 (재학습 후 확인 예정)
 
 ## Last Updated
-- 2026-05-17 17:10 KST
+- 2026-05-24 21:50

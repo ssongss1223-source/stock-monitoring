@@ -2,6 +2,108 @@
 
 ---
 
+## 2026-05-24 세션 48 — 라벨 18개 재설계 + 재라벨링 완료 + 인프라 개선
+- 작업: 라벨 구조 변경, 재라벨링 완료, 파이프라인 인프라 전면 개선
+- 변경 사항:
+  - `backtest/labeler.py`: 라벨 18개 (clean 9 + first-touch 9), `_DD_THRESH = {3:-0.015, 5:-0.025, 10:-0.04}` (hold period 기준)
+  - `scripts/build_historical_matrix.py`: 20,000행 단위 청크 체크포인트 (parquet 누적 저장/복구)
+  - `scripts/train_models.py`: 라벨별 OOF+summary 체크포인트 (완료 라벨 skip)
+  - `scripts/deploy_and_run.sh`: git pull + 파이프라인 시작 통합 (중복 실행 감지, chmod 댄스 내장)
+  - `scripts/notify_pipeline.sh`: /tmp 임시 → scripts/ git 관리, .env에서 토큰 읽기
+  - 체크포인트/로그 경로: `/tmp/` → `/opt/stock-monitor/logs/` (재부팅 영속화)
+  - VM: PYTHONPATH stock .bashrc/.profile 등록, sudoers 규칙 추가 (KHSong→stock kill 권한)
+- 관련 파일: `backtest/labeler.py`, `scripts/build_historical_matrix.py`, `scripts/train_models.py`, `scripts/deploy_and_run.sh`, `scripts/notify_pipeline.sh`
+- 메모:
+  - 재라벨링 결과: 215,993건 UPDATE, 945건 스킵 (미래 데이터 부족), 약 3시간 소요
+  - 라벨 타입 제거: Basic 9 + C2 8 → 학습 타겟에서 제외 (universe_daily 컬럼은 유지)
+  - 파이프라인 feature_engineering 진입 전 사용자 요청으로 대기 중
+- 다음 아이디어: feature_engineering.py 피처 구성 검토 → train_models 재학습 (~21시간)
+
+---
+
+## 2026-05-23 세션 47 — 학습 데이터 215k 확장 + VM 재학습 시작 + 라벨 설계 분석
+- 작업: feature_engineering.py/train_models.py 수정, VM 학습 시작, clean 라벨 달성률 분석
+- 변경 사항:
+  - `scripts/feature_engineering.py`: 학습 데이터 소스를 signal_history(16k) → universe_daily(215k)로 전환
+  - `scripts/train_models.py`: clean 라벨 9개 추가 타겟, max_close 컬럼 옵셔널 처리
+  - VM `/opt/stock-monitor/data/models/`: `chmod -R 777` (stock user 소유 파일 덮어쓰기 허용)
+- 관련 파일: 위 2개 스크립트, VM 학습 로그 `/tmp/train_models.log`
+- 메모:
+  - 학습 구성: 29라벨 × XGB+LGBM+ET 앙상블 × 5-fold TimeSeriesSplit = 435 학습
+  - 학습 데이터: 215,993행 (383종목 × 571거래일), 유동성 필터 후 176,086행
+  - screen 세션으로 단일 프로세스 실행 (이전 4개 동시 실행 오류 수정)
+  - label_3d_3pct Soft OOF AUC 0.6002, label_3d_5pct 0.6393 (2/29 완료)
+- 분석 결과 (라벨 설계):
+  - Basic ⊇ C2 ⊇ Clean ⊇ First-touch 구조 확인
+  - 권장: Basic+C2 제거, Clean(9) + First-touch(3) = 12개로 정리
+  - First-touch stop-loss R:R 개선 제안: -2%/-3%/-5% → -1.5%/-2.5%/-3% (수익목표% 기준)
+  - Clean 라벨에는 동일 적용 금지 — 10d보유에 -1.5% 허용은 비현실적 (10d_3pct 45.6%→23.4%)
+  - Clean 라벨 임계값은 hold period 기준 유지(-2%/-3%/-5%) 권장
+- 다음 아이디어: VM 학습 완료 후 전체 AUC 확인 → 라벨 정리 결정 → feature 확장 논의
+
+---
+
+## 2026-05-22 세션 46 — universe_daily 전종목 피쳐/ML/라벨 테이블 구현
+- 작업: `universe_daily` 테이블 설계~구현 완료 (DDL, ML 추론, orchestrator 연동, 백필 스크립트)
+- 변경 사항:
+  - `data/db.py`: `universe_daily` 60컬럼 DDL + migration 추가
+  - `agents/ml_scorer.py`: `score_universe_all()` 전종목 ML 추론 함수 추가
+  - `agents/orchestrator.py`: `_insert_universe_daily()`, `_update_universe_vol_trend()`, `_update_universe_preds()`, `_auto_label_universe_unlabeled()` 4개 함수 추가; `_analyze_stock()` 6-tuple 반환으로 확장; `_pipeline()` universe 업데이트 연동
+  - `scripts/build_historical_matrix.py`: 2024-01-01~현재 백필 스크립트 신규 작성
+- 관련 파일: 위 4개 파일, `.claude/plans/universe_daily.md`
+- 메모:
+  - SQL CTE 단일 쿼리로 350종목 × 500일 피쳐 일괄 INSERT (MA/RSI/BB/hist_vol/KOSPI 등)
+  - trend_score/vol_score_live는 Python 계산 필요 → 수집 배치 NULL, 분석 배치에서 UPDATE
+  - INSERT OR REPLACE 백필 시 기존 행 trend_score NULL 리셋 → 다음 분석 배치에서 자동 복원
+  - vol_score_live 과거 데이터(2026-02-06 이전) = NULL (ohlcv_min 없음)
+- 다음 아이디어: VM git pull → DDL 적용 → dry-run → systemd-run 백필 실행
+
+---
+
+## 2026-05-21 세션 45 — 리포트 정렬 개선 + bear 장 추천 활성화
+- 작업: market_bias KeyError 진단/수정, 리포트 정렬 로직 ML확률 기준으로 전환, bear 장 S등급 허용
+- 변경 사항:
+  - `config/scoring/v1_baseline/market.yaml`: market_bias 섹션 복원 (bf399f9 리팩토링 중 삭제된 버그)
+  - `config/scoring/v1_baseline/buy_grade.yaml`: `S.bear: allowed=false` → trend=14/vol=15/total=33
+  - `agents/report.py`: `_four_groups()` EV→ML확률 기준으로 변경, 단기 우선 + 스윙 중복 제거, `_label_tiebreak()` 추가, `pr_by_ticker` 인자 추가
+- 관련 파일: 위 3개 파일
+- 메모:
+  - market_bias 누락으로 매일 분석이 14초만에 crash 중이었음 (2026-05-17~21, 5일간)
+  - c2 코드는 이미 반영 완료 상태, 내일 배치부터 c2 확률 표시됨
+  - 오늘(2026-05-20 기준) S등급 2종목만 나온 이유: 실제로 S등급 통과 종목이 2개뿐
+  - MCP vm-ssh 사용 가능 확인 (IAP 터널, gcloud plink 이슈 없음)
+- 다음 아이디어: 내일 배치 결과 확인, system.md 업데이트, 2년치 historical matrix
+
+## 2026-05-18 세션 44 — c2 5개 라벨 재학습 완료 + 리포트 연결 계획
+- 작업: at 잡 silent fail 원인 파악 → systemd-run으로 재학습 성공, 텔레그램 리포트 c2 연결 분석
+- 변경 사항: 없음 (코드 수정 다음 세션)
+- 관련 파일: `agents/ml_scorer.py`, `agents/report.py` (수정 예정)
+- 메모:
+  - at 잡 실패 원인: `/tmp/train_c2_run.log` 소유권 문제 (atd가 파일 생성, python이 append 권한 없음)
+  - 해결: `sudo rm /tmp/train_c2_run.log` + `sudo systemd-run --unit=train-c2-v2 ...` → 18분 완료
+  - MCP vm-ssh 불안정 이유 확인: hardcoded IP `34.171.35.91` → VM 재시작 시 변경, IAP 터널 미사용
+  - report.py EV 버그 발견: `_ev_per_day()`에서 `label.split("_")` 2개 언팩 → c2 라벨에서 ValueError
+  - signal_xgb_probs c2 미채워짐 → 다음 배치(06:00 KST)에 자동 채워지거나 수동 추론 필요
+- 다음 아이디어: ml_scorer + report.py 수정 → 배포 → --resend-last 테스트
+
+## 2026-05-18 세션 43 — c2 라벨 8개 구현 + VM 전체 파이프라인 + OOM 복구
+- 작업: c2 라벨(종가 2일↑) 8개 코드 구현, VM 전체 파이프라인 실행, OOM 복구 및 나머지 학습 예약
+- 변경 사항:
+  - `backtest/labeler.py`: `_C2_COMBOS` 추가, `label_one()` c2 계산 로직 추가
+  - `data/db.py`: `backtest_labels` c2 컬럼 8개 + migration ALTER TABLE 추가
+  - `scripts/feature_engineering.py`: c2 → label_*_c2 파생 로직 추가
+  - `scripts/train_models.py`, `train_xgboost.py`: `_TARGETS` 17개, `_DROP` c2 raw 컬럼 추가
+  - `mcp/mcp_duckdb.py`: per-request connection으로 재작성 (async hang 문제 해결)
+  - `.claude/settings.json`: MCP 권한 project-level 추가
+- 관련 파일: 위 5개 파일
+- 메모:
+  - e2-micro 1GB RAM: 12/17 모델 학습 후 OOM → VM 하드 리셋 필요
+  - catboost 파일은 ml_scorer.py에서 사용 안 함 (orphan), 나중에 삭제
+  - gcloud compute ssh on Windows: plink 없음, OpenSSH + IAP 터널 방식 사용
+  - at 잡 job#1: `sudo /opt/stock-monitor/.venv/bin/python /tmp/train_c2.py` @ 00:00 UTC May 18
+  - 사용자 지시: MCP(DuckDB/SSH/Telegram) 사용 중단, 에러 잦음
+- 다음 아이디어: 학습 완료 후 system.md 업데이트, 2년치 historical matrix 구현
+
 ## 2026-05-17 세션 41 — 텔레그램 EV/day 정렬 + 4그룹 리포트 구조 개편
 - 작업: 기대값(EV/day) 개념 도입, 텔레그램 리포트 대형주/중소형주 × 단기/스윙 4그룹 구조로 전면 개편
 - 변경 사항:
