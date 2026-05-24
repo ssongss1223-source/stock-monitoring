@@ -33,8 +33,8 @@ if pgrep -f 'build_historical_matrix\|feature_engineering\|train_models' > /dev/
     exit 1
 fi
 
-# 로그 초기화
-sudo bash -c "echo '' > $LOG && chown stock:stock $LOG"
+# 로그 초기화 (stock + KHSong 모두 쓸 수 있도록 666)
+sudo bash -c "echo '' > $LOG && chown stock:stock $LOG && chmod 666 $LOG"
 
 # Telegram 모니터 시작
 pkill -f notify_pipeline.sh 2>/dev/null || true
