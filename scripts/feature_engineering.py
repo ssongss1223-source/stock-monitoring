@@ -149,10 +149,13 @@ def _compute_all_features(conn) -> pd.DataFrame:
         ),
         atr AS (
             SELECT ticker, date,
-                   AVG(true_range) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS atr_14,
-                   AVG(AVG(true_range) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW))
-                       OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) AS atr_60d_mean
+                   AVG(true_range) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS atr_14
             FROM tr
+        ),
+        atr2 AS (
+            SELECT ticker, date, atr_14,
+                   AVG(atr_14) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) AS atr_60d_mean
+            FROM atr
         ),
         rsi_raw AS (
             SELECT ticker, date,
@@ -246,8 +249,8 @@ def _compute_all_features(conn) -> pd.DataFrame:
             -- grade_S/A/B: universe_daily JOIN 후 (pandas)
             -- ── Section B: Tier 1 신규 ────────────────────────────────────
             4 * ma.std20 / NULLIF(ma.ma20, 0)                            AS bb_width,
-            atr.atr_14,
-            atr.atr_14 / NULLIF(atr.atr_60d_mean, 0)                    AS atr_ratio_60d,
+            atr2.atr_14,
+            atr2.atr_14 / NULLIF(atr2.atr_60d_mean, 0)                   AS atr_ratio_60d,
             (ma.volume - ma.avg_vol_20d) / NULLIF(ma.std_vol_20d, 0)    AS volume_zscore_20d,
             (ma.amount - ma.avg_amt_20d) / NULLIF(ma.std_amt_20d, 0)    AS amount_zscore_20d,
             -- rs_20d, rs_rank_pct, market_breadth: 시장 피처 JOIN 후 계산 (pandas)
@@ -273,7 +276,7 @@ def _compute_all_features(conn) -> pd.DataFrame:
             flows.foreign_net_5d,
             flows.inst_net_5d
         FROM ma
-        JOIN atr         ON ma.ticker = atr.ticker       AND ma.date = atr.date
+        JOIN atr2        ON ma.ticker = atr2.ticker      AND ma.date = atr2.date
         JOIN rsi_avg     ON ma.ticker = rsi_avg.ticker   AND ma.date = rsi_avg.date
         JOIN obv_slope   ON ma.ticker = obv_slope.ticker AND ma.date = obv_slope.date
         JOIN short_roll sr ON ma.ticker = sr.ticker      AND ma.date = sr.date
