@@ -30,7 +30,7 @@ LABEL_DONE_COUNT=0
 if grep -q "^RELABEL_DONE" "$LOG" 2>/dev/null; then RELABEL_DONE=1; CURRENT_PHASE="build"; fi
 if grep -q "^BUILD_DONE"   "$LOG" 2>/dev/null; then BUILD_DONE=1;   CURRENT_PHASE="train"; fi
 if grep -q "^TRAIN_DONE"   "$LOG" 2>/dev/null; then TRAIN_DONE=1; fi
-LABEL_DONE_COUNT=$(grep -c "^체크포인트:" "$LOG" 2>/dev/null || echo 0)
+LABEL_DONE_COUNT=$(grep "^체크포인트:" "$LOG" 2>/dev/null | wc -l)
 
 LAST_HOURLY=$(date +%s)
 CURRENT_PHASE_START=$(date +%s)
@@ -74,12 +74,12 @@ while true; do
 
     # ── train phase: 라벨 완료(체크포인트:) 감지 → 즉시 알림 ──────────
     if [ "$CURRENT_PHASE" = "train" ]; then
-        NEW_COUNT=$(grep -c "^체크포인트:" "$LOG" 2>/dev/null || echo 0)
+        NEW_COUNT=$(grep "^체크포인트:" "$LOG" 2>/dev/null | wc -l)
         if [ "$NEW_COUNT" -gt "$LABEL_DONE_COUNT" ]; then
             LABEL_DONE_COUNT=$NEW_COUNT
             ELAPSED_H=$(( (NOW - CURRENT_PHASE_START) / 3600 ))
             ELAPSED_M=$(( ((NOW - CURRENT_PHASE_START) % 3600) / 60 ))
-            LAST_CKPT=$(grep "^체크포인트:" "$LOG" 2>/dev/null | tail -3 | tr '\n' '\n')
+            LAST_CKPT=$(grep "^체크포인트:" "$LOG" 2>/dev/null | tail -3 | tr '\n' ' | ')
             send "[학습 진행] ${LABEL_DONE_COUNT}/18 라벨 완료 $(date '+%H:%M')
 경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
 ${LAST_CKPT}"
