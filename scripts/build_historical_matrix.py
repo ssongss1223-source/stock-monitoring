@@ -231,6 +231,7 @@ def insert_features(start: str, end: str, dry_run: bool = False) -> None:
 
 
 _CHECKPOINT_PATH = "/tmp/labels_checkpoint.parquet"
+_CHUNK_SIZE = 20_000
 
 
 def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
@@ -260,13 +261,20 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
         print(f"[dry-run] 라벨 업데이트 예정: {len(rows):,}행 (cutoff {cutoff})")
         return
 
-    # 체크포인트가 있으면 재계산 건너뜀
+    # 체크포인트에서 이미 완료된 행 복구
     if os.path.exists(_CHECKPOINT_PATH):
-        logger.info("체크포인트 발견, 재계산 건너뜀: %s", _CHECKPOINT_PATH)
-        df_labels = pd.read_parquet(_CHECKPOINT_PATH)
+        df_ckpt = pd.read_parquet(_CHECKPOINT_PATH)
+        done_pairs = set(zip(df_ckpt["ticker"], df_ckpt["date"].astype(str)))
+        logger.info("체크포인트 복구: %d행 완료됨", len(df_ckpt))
     else:
-        # ohlcv_daily 전체 로드 (label_one 에 필요한 미래 데이터 포함)
-        tickers = list({r[0] for r in rows})
+        df_ckpt = pd.DataFrame()
+        done_pairs = set()
+
+    rows_todo = [(t, d) for t, d in rows if (t, d) not in done_pairs]
+    logger.info("미완료 대상: %d행 (이미 완료: %d행)", len(rows_todo), len(done_pairs))
+
+    if rows_todo:
+        tickers = list({r[0] for r in rows_todo})
         placeholders = ", ".join("?" * len(tickers))
         conn_r = get_conn(read_only=True)
         try:
@@ -279,7 +287,6 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
             conn_r.close()
 
         df_all["date"] = pd.to_datetime(df_all["date"])
-
         ticker_dfs = {
             ticker: grp.set_index("date").rename(
                 columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}
@@ -287,28 +294,37 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
             for ticker, grp in df_all.groupby("ticker", sort=False)
         }
 
-        labeled_rows: list[dict] = []
-        skipped = 0
-        for ticker, date_str in rows:
-            df = ticker_dfs.get(ticker)
-            if df is None:
-                skipped += 1
-                continue
-            result = label_one(df, date_str)
-            if result is not None:
-                labeled_rows.append({"ticker": ticker, "date": date_str, **result})
-            else:
-                skipped += 1
+        total_skipped = 0
+        for chunk_start in range(0, len(rows_todo), _CHUNK_SIZE):
+            chunk = rows_todo[chunk_start: chunk_start + _CHUNK_SIZE]
+            labeled_chunk: list[dict] = []
+            for ticker, date_str in chunk:
+                df = ticker_dfs.get(ticker)
+                if df is None:
+                    total_skipped += 1
+                    continue
+                result = label_one(df, date_str)
+                if result is not None:
+                    labeled_chunk.append({"ticker": ticker, "date": date_str, **result})
+                else:
+                    total_skipped += 1
 
-        logger.info("라벨 계산 완료: %d건 성공, %d건 미래데이터 부족으로 스킵", len(labeled_rows), skipped)
+            if labeled_chunk:
+                df_chunk = pd.DataFrame(labeled_chunk)
+                if os.path.exists(_CHECKPOINT_PATH):
+                    pd.concat([pd.read_parquet(_CHECKPOINT_PATH), df_chunk], ignore_index=True).to_parquet(_CHECKPOINT_PATH, index=False)
+                else:
+                    df_chunk.to_parquet(_CHECKPOINT_PATH, index=False)
+                done_so_far = chunk_start + len(chunk) - total_skipped
+                logger.info("청크 저장: %d / %d행 완료", done_so_far, len(rows_todo))
 
-        if not labeled_rows:
-            return
+        logger.info("라벨 계산 완료 (스킵: %d건)", total_skipped)
 
-        df_labels = pd.DataFrame(labeled_rows)
-        df_labels.to_parquet(_CHECKPOINT_PATH, index=False)
-        logger.info("체크포인트 저장: %s", _CHECKPOINT_PATH)
+    if not os.path.exists(_CHECKPOINT_PATH):
+        logger.info("저장된 라벨 없음, 종료")
+        return
 
+    df_labels = pd.read_parquet(_CHECKPOINT_PATH)
     set_clause = ", ".join(f"{col} = s.{col}" for col in _LABEL_COLS)
 
     conn = get_conn()

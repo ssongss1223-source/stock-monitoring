@@ -228,6 +228,22 @@ def main() -> None:
 
     for target in _TARGETS:
         label_key = target.replace("label_", "")          # "3d_5pct"
+
+        # ── 체크포인트 복구 ────────────────────────────────────────────────
+        ckpt_oof = out_dir / f"oof_ckpt_{label_key}.parquet"
+        ckpt_sum = out_dir / f"summary_ckpt_{label_key}.json"
+        if (out_dir / f"xgb_label_{label_key}.json").exists() and ckpt_oof.exists() and ckpt_sum.exists():
+            print(f"  → 체크포인트 복구: {target} (건너뜀)")
+            df_ckpt = pd.read_parquet(ckpt_oof)
+            for col in df_ckpt.columns:
+                oof_df[col] = df_ckpt[col].values
+            with open(ckpt_sum, encoding="utf-8") as _f:
+                _ckpt = json.load(_f)
+            summary.append(_ckpt["row"])
+            if _ckpt.get("model_meta"):
+                model_meta[label_key] = _ckpt["model_meta"]
+            continue
+
         if label_key.startswith("first_"):
             max_close_col = None
         else:
@@ -358,6 +374,13 @@ def main() -> None:
                         str(out_dir / f"lr_stacker_{label_key}.pkl"))
 
         summary.append(row)
+
+        # ── 체크포인트 저장 ────────────────────────────────────────────────
+        label_oof_cols = [c for c in oof_df.columns if f"_{label_key}" in c]
+        oof_df[label_oof_cols].to_parquet(ckpt_oof, index=False)
+        with open(ckpt_sum, "w", encoding="utf-8") as _f:
+            json.dump({"row": row, "model_meta": model_meta.get(label_key)}, _f, ensure_ascii=False, indent=2)
+
         print()
 
     # ── 전체 요약 테이블 ─────────────────────────────────────────────────────
