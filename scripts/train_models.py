@@ -381,6 +381,8 @@ def main() -> None:
         with open(ckpt_sum, "w", encoding="utf-8") as _f:
             json.dump({"row": row, "model_meta": model_meta.get(label_key)}, _f, ensure_ascii=False, indent=2)
 
+        best_info = model_meta.get(label_key, {})
+        print(f"체크포인트: {label_key} — 최고:{best_info.get('best','?').upper()} AUC={row.get('xgb_auc', float('nan')):.4f}")
         print()
 
     # ── 전체 요약 테이블 ─────────────────────────────────────────────────────

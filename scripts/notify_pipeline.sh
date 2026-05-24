@@ -3,7 +3,7 @@
 # 사용: nohup bash /opt/stock-monitor/scripts/notify_pipeline.sh > /tmp/notify.log 2>&1 &
 #
 # 마커 순서: RELABEL_DONE → BUILD_DONE → TRAIN_DONE
-# 각 phase 시작 후 1시간마다 진행 알림 전송
+# train phase: 라벨 완료(체크포인트:)마다 알림 + 1시간마다 진행 알림
 
 BOT_TOKEN="$(grep TELEGRAM_BOT_TOKEN /opt/stock-monitor/.env | cut -d= -f2)"
 CHAT_ID="$(grep TELEGRAM_CHAT_ID /opt/stock-monitor/.env | cut -d= -f2)"
@@ -27,6 +27,9 @@ TRAIN_DONE=0
 LAST_HOURLY=$(date +%s)
 CURRENT_PHASE_START=$(date +%s)
 CURRENT_PHASE="relabel"
+
+# train phase: 완료된 라벨 수 추적
+LABEL_DONE_COUNT=0
 
 while true; do
     sleep 30
@@ -65,6 +68,21 @@ while true; do
         exit 0
     fi
 
+    # ── train phase: 라벨 완료(체크포인트:) 감지 → 즉시 알림 ──────────
+    if [ "$CURRENT_PHASE" = "train" ]; then
+        NEW_COUNT=$(grep -c "^체크포인트:" "$LOG" 2>/dev/null || echo 0)
+        if [ "$NEW_COUNT" -gt "$LABEL_DONE_COUNT" ]; then
+            LABEL_DONE_COUNT=$NEW_COUNT
+            ELAPSED_H=$(( (NOW - CURRENT_PHASE_START) / 3600 ))
+            ELAPSED_M=$(( ((NOW - CURRENT_PHASE_START) % 3600) / 60 ))
+            LAST_CKPT=$(grep "^체크포인트:" "$LOG" 2>/dev/null | tail -3 | tr '\n' '\n')
+            send "[학습 진행] ${LABEL_DONE_COUNT}/18 라벨 완료 $(date '+%H:%M')
+경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
+${LAST_CKPT}"
+            LAST_HOURLY=$NOW
+        fi
+    fi
+
     # ── 시간당 진행 알림 (build 또는 train phase 진행 중) ──────────────
     if [ $(( NOW - LAST_HOURLY )) -ge 3600 ]; then
         LAST_HOURLY=$NOW
@@ -78,9 +96,9 @@ while true; do
 최근 로그: $LAST_LOG"
 
         elif [ "$CURRENT_PHASE" = "train" ]; then
-            LAST_LOG=$(grep -E "체크포인트|label_" "$LOG" 2>/dev/null | tail -3 | tr '\n' ' | ')
+            LAST_LOG=$(grep "^→ 최고 모델:" "$LOG" 2>/dev/null | tail -3 | tr '\n' ' | ')
             send "[학습 진행 중] $(date '+%H:%M')
-경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
+${LABEL_DONE_COUNT}/18 라벨 완료, 경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
 최근: $LAST_LOG"
         fi
     fi
