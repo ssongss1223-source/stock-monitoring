@@ -22,7 +22,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from data.db import get_conn
+from data.db import get_conn, init_db
 
 # universe_daily 에 이미 있어서 universe_features_daily 에는 저장하지 않는 컬럼
 _UD_COLS = {
@@ -365,6 +365,7 @@ def _save_features_to_db(df: pd.DataFrame) -> None:
 
 def run_build(output_path: str) -> None:
     """ohlcv → 계산 → DB 저장 + parquet 생성."""
+    init_db()  # universe_features_daily 테이블 생성 (마이그레이션 적용)
     print("=== BUILD MODE: 피처 계산 → universe_features_daily 저장 ===")
     conn = get_conn(read_only=True)
     try:
