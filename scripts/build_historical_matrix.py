@@ -230,7 +230,7 @@ def insert_features(start: str, end: str, dry_run: bool = False) -> None:
         conn.close()
 
 
-_CHECKPOINT_PATH = "/tmp/labels_checkpoint.parquet"
+_CHECKPOINT_PATH = "/opt/stock-monitor/logs/labels_checkpoint.parquet"
 _CHUNK_SIZE = 20_000
 
 

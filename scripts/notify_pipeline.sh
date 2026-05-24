@@ -4,7 +4,7 @@
 
 BOT_TOKEN="$(grep TELEGRAM_BOT_TOKEN /opt/stock-monitor/.env | cut -d= -f2)"
 CHAT_ID="$(grep TELEGRAM_CHAT_ID /opt/stock-monitor/.env | cut -d= -f2)"
-LOG="/tmp/pipeline.log"
+LOG="/opt/stock-monitor/logs/pipeline.log"
 
 send() {
     curl -s -X POST "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \

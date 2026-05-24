@@ -9,7 +9,7 @@ set -e
 
 APP_DIR=/opt/stock-monitor
 PY=$APP_DIR/.venv/bin/python
-LOG=/tmp/pipeline.log
+LOG=/opt/stock-monitor/logs/pipeline.log
 
 SKIP_RELABEL=0
 SKIP_FEATURES=0
