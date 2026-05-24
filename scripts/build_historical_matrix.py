@@ -230,8 +230,13 @@ def insert_features(start: str, end: str, dry_run: bool = False) -> None:
         conn.close()
 
 
+_CHECKPOINT_PATH = "/tmp/labels_checkpoint.parquet"
+
+
 def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
     """universe_daily 에서 label_3d_3pct IS NULL 이고 date <= today-cutoff_days 인 행 라벨 채우기."""
+    import os
+
     cutoff = (date.today() - timedelta(days=cutoff_days)).isoformat()
 
     conn_r = get_conn(read_only=True)
@@ -255,47 +260,55 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
         print(f"[dry-run] 라벨 업데이트 예정: {len(rows):,}행 (cutoff {cutoff})")
         return
 
-    # ohlcv_daily 전체 로드 (label_one 에 필요한 미래 데이터 포함)
-    tickers = list({r[0] for r in rows})
-    placeholders = ", ".join("?" * len(tickers))
-    conn_r = get_conn(read_only=True)
-    try:
-        df_all = conn_r.execute(
-            f"SELECT ticker, date, open, high, low, close FROM ohlcv_daily "
-            f"WHERE ticker IN ({placeholders}) ORDER BY ticker, date",
-            tickers,
-        ).df()
-    finally:
-        conn_r.close()
+    # 체크포인트가 있으면 재계산 건너뜀
+    if os.path.exists(_CHECKPOINT_PATH):
+        logger.info("체크포인트 발견, 재계산 건너뜀: %s", _CHECKPOINT_PATH)
+        df_labels = pd.read_parquet(_CHECKPOINT_PATH)
+    else:
+        # ohlcv_daily 전체 로드 (label_one 에 필요한 미래 데이터 포함)
+        tickers = list({r[0] for r in rows})
+        placeholders = ", ".join("?" * len(tickers))
+        conn_r = get_conn(read_only=True)
+        try:
+            df_all = conn_r.execute(
+                f"SELECT ticker, date, open, high, low, close FROM ohlcv_daily "
+                f"WHERE ticker IN ({placeholders}) ORDER BY ticker, date",
+                tickers,
+            ).df()
+        finally:
+            conn_r.close()
 
-    df_all["date"] = pd.to_datetime(df_all["date"])
+        df_all["date"] = pd.to_datetime(df_all["date"])
 
-    ticker_dfs = {
-        ticker: grp.set_index("date").rename(
-            columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}
-        )
-        for ticker, grp in df_all.groupby("ticker", sort=False)
-    }
+        ticker_dfs = {
+            ticker: grp.set_index("date").rename(
+                columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"}
+            )
+            for ticker, grp in df_all.groupby("ticker", sort=False)
+        }
 
-    labeled_rows: list[dict] = []
-    skipped = 0
-    for ticker, date_str in rows:
-        df = ticker_dfs.get(ticker)
-        if df is None:
-            skipped += 1
-            continue
-        result = label_one(df, date_str)
-        if result is not None:
-            labeled_rows.append({"ticker": ticker, "date": date_str, **result})
-        else:
-            skipped += 1
+        labeled_rows: list[dict] = []
+        skipped = 0
+        for ticker, date_str in rows:
+            df = ticker_dfs.get(ticker)
+            if df is None:
+                skipped += 1
+                continue
+            result = label_one(df, date_str)
+            if result is not None:
+                labeled_rows.append({"ticker": ticker, "date": date_str, **result})
+            else:
+                skipped += 1
 
-    logger.info("라벨 계산 완료: %d건 성공, %d건 미래데이터 부족으로 스킵", len(labeled_rows), skipped)
+        logger.info("라벨 계산 완료: %d건 성공, %d건 미래데이터 부족으로 스킵", len(labeled_rows), skipped)
 
-    if not labeled_rows:
-        return
+        if not labeled_rows:
+            return
 
-    df_labels = pd.DataFrame(labeled_rows)
+        df_labels = pd.DataFrame(labeled_rows)
+        df_labels.to_parquet(_CHECKPOINT_PATH, index=False)
+        logger.info("체크포인트 저장: %s", _CHECKPOINT_PATH)
+
     set_clause = ", ".join(f"{col} = s.{col}" for col in _LABEL_COLS)
 
     conn = get_conn()
@@ -307,9 +320,11 @@ def update_labels(cutoff_days: int = 15, dry_run: bool = False) -> None:
             FROM _lbls s
             WHERE ud.date = CAST(s.date AS DATE) AND ud.ticker = s.ticker
         """)
-        logger.info("라벨 UPDATE 완료: %d건", len(labeled_rows))
+        logger.info("라벨 UPDATE 완료: %d건", len(df_labels))
+        os.remove(_CHECKPOINT_PATH)
+        logger.info("체크포인트 삭제 완료")
     except Exception:
-        logger.exception("라벨 UPDATE 실패")
+        logger.exception("라벨 UPDATE 실패 — 체크포인트 유지: %s", _CHECKPOINT_PATH)
         raise
     finally:
         conn.close()
