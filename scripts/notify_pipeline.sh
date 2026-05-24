@@ -20,16 +20,20 @@ send "[파이프라인 시작됨] $(date '+%H:%M KST')
 2단계: 피처 빌드 (universe_features_daily 백필, 3~4시간 예상)
 3단계: 모델 학습 (18 라벨, ~21시간 예상)"
 
+# ── 재시작 시 이미 완료된 단계를 로그에서 복원 ──────────────────────
 RELABEL_DONE=0
 BUILD_DONE=0
 TRAIN_DONE=0
+CURRENT_PHASE="relabel"
+LABEL_DONE_COUNT=0
+
+if grep -q "^RELABEL_DONE" "$LOG" 2>/dev/null; then RELABEL_DONE=1; CURRENT_PHASE="build"; fi
+if grep -q "^BUILD_DONE"   "$LOG" 2>/dev/null; then BUILD_DONE=1;   CURRENT_PHASE="train"; fi
+if grep -q "^TRAIN_DONE"   "$LOG" 2>/dev/null; then TRAIN_DONE=1; fi
+LABEL_DONE_COUNT=$(grep -c "^체크포인트:" "$LOG" 2>/dev/null || echo 0)
 
 LAST_HOURLY=$(date +%s)
 CURRENT_PHASE_START=$(date +%s)
-CURRENT_PHASE="relabel"
-
-# train phase: 완료된 라벨 수 추적
-LABEL_DONE_COUNT=0
 
 while true; do
     sleep 30
