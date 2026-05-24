@@ -220,12 +220,15 @@ def _compute_all_features(conn) -> pd.DataFrame:
                    CASE WHEN bps > 0 THEN CAST(eps AS DOUBLE) / NULLIF(bps, 0) ELSE NULL END AS roe_proxy
             FROM ohlcv_daily
         ),
+        up_dir AS (
+            SELECT ticker, date,
+                   CASE WHEN close > LAG(close,1) OVER (PARTITION BY ticker ORDER BY date) THEN 1 ELSE 0 END AS up_flag
+            FROM ohlcv_daily
+        ),
         up_days AS (
             SELECT ticker, date,
-                   SUM(CASE WHEN close > LAG(close,1) OVER (PARTITION BY ticker ORDER BY date) THEN 1 ELSE 0 END)
-                       OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW)
-                       AS up_days_5d
-            FROM ohlcv_daily
+                   SUM(up_flag) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS up_days_5d
+            FROM up_dir
         )
         SELECT
             ma.ticker, ma.date,
