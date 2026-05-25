@@ -26,8 +26,8 @@ _LABELS = [
     "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
 ]
 
-# (모델 접두사, 파일 확장자)
-_MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt"), ("et", ".pkl")]
+# (모델 접두사, 파일 확장자) — ET(.pkl) 제외: VM RAM 969MB < ET 모델 420MB×18
+_MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt")]
 
 # feature_engineering._FEAT_TRAIN_COLS 와 동일한 순서 — universe_features_daily 컬럼
 _FEAT_COLS = [
