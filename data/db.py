@@ -236,23 +236,24 @@ CREATE TABLE IF NOT EXISTS universe_daily (
     grade_approx      VARCHAR,
     grade_live        VARCHAR,
 
-    pred_3d_3pct      DOUBLE,
-    pred_3d_5pct      DOUBLE,
-    pred_3d_10pct     DOUBLE,
-    pred_5d_3pct      DOUBLE,
-    pred_5d_5pct      DOUBLE,
-    pred_5d_10pct     DOUBLE,
-    pred_10d_3pct     DOUBLE,
-    pred_10d_5pct     DOUBLE,
-    pred_10d_10pct    DOUBLE,
-    pred_3d_3pct_c2   DOUBLE,
-    pred_3d_5pct_c2   DOUBLE,
-    pred_5d_3pct_c2   DOUBLE,
-    pred_5d_5pct_c2   DOUBLE,
-    pred_5d_10pct_c2  DOUBLE,
-    pred_10d_3pct_c2  DOUBLE,
-    pred_10d_5pct_c2  DOUBLE,
-    pred_10d_10pct_c2 DOUBLE,
+    pred_3d_3pct_clean    DOUBLE,
+    pred_3d_5pct_clean    DOUBLE,
+    pred_3d_10pct_clean   DOUBLE,
+    pred_5d_3pct_clean    DOUBLE,
+    pred_5d_5pct_clean    DOUBLE,
+    pred_5d_10pct_clean   DOUBLE,
+    pred_10d_3pct_clean   DOUBLE,
+    pred_10d_5pct_clean   DOUBLE,
+    pred_10d_10pct_clean  DOUBLE,
+    pred_first_3d_3pct    DOUBLE,
+    pred_first_3d_5pct    DOUBLE,
+    pred_first_3d_10pct   DOUBLE,
+    pred_first_5d_3pct    DOUBLE,
+    pred_first_5d_5pct    DOUBLE,
+    pred_first_5d_10pct   DOUBLE,
+    pred_first_10d_3pct   DOUBLE,
+    pred_first_10d_5pct   DOUBLE,
+    pred_first_10d_10pct  DOUBLE,
 
     entry_price        DOUBLE,
     label_3d_3pct      BOOLEAN,
@@ -402,6 +403,24 @@ ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_10pct_clean BOOLEA
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_3pct   BOOLEAN;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_5pct   BOOLEAN;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_10pct  BOOLEAN;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_3d_3pct_clean    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_3d_5pct_clean    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_3d_10pct_clean   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_5d_3pct_clean    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_5d_5pct_clean    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_5d_10pct_clean   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_10d_3pct_clean   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_10d_5pct_clean   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_10d_10pct_clean  DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_3d_3pct    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_3d_5pct    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_3d_10pct   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_5d_3pct    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_5d_5pct    DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_5d_10pct   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_10d_3pct   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_10d_5pct   DOUBLE;
+ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_10d_10pct  DOUBLE;
 """
 
 

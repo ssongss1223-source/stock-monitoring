@@ -666,12 +666,12 @@ def _update_universe_vol_trend(
 def _update_universe_preds(date_str: str) -> None:
     """universe_daily에 ML 예측 확률 일괄 UPDATE."""
     _PRED_LABELS = [
-        "3d_3pct", "3d_5pct", "3d_10pct",
-        "5d_3pct", "5d_5pct", "5d_10pct",
-        "10d_3pct", "10d_5pct", "10d_10pct",
-        "3d_3pct_c2", "3d_5pct_c2",
-        "5d_3pct_c2", "5d_5pct_c2", "5d_10pct_c2",
-        "10d_3pct_c2", "10d_5pct_c2", "10d_10pct_c2",
+        "3d_3pct_clean", "3d_5pct_clean", "3d_10pct_clean",
+        "5d_3pct_clean", "5d_5pct_clean", "5d_10pct_clean",
+        "10d_3pct_clean", "10d_5pct_clean", "10d_10pct_clean",
+        "first_3d_3pct", "first_3d_5pct", "first_3d_10pct",
+        "first_5d_3pct", "first_5d_5pct", "first_5d_10pct",
+        "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
     ]
     try:
         probs_by_ticker = score_universe_all(date_str)

@@ -1,4 +1,4 @@
-"""멀티모델 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트 + 9개 라벨 동시 추론.
+"""멀티모델 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트 + 18개 라벨 동시 추론.
 
 XGB + LGBM + ET soft voting 앙상블 사용. 모델 파일이 없으면 조용히 스킵.
 """
@@ -18,245 +18,66 @@ logger = logging.getLogger(__name__)
 
 _MODEL_DIR = Path("data/models")
 _LABELS = [
-    "3d_3pct", "3d_5pct", "3d_10pct",
-    "5d_3pct", "5d_5pct", "5d_10pct",
-    "10d_3pct", "10d_5pct", "10d_10pct",
-    "3d_3pct_c2", "3d_5pct_c2",
-    "5d_3pct_c2", "5d_5pct_c2", "5d_10pct_c2",
-    "10d_3pct_c2", "10d_5pct_c2", "10d_10pct_c2",
+    "3d_3pct_clean", "3d_5pct_clean", "3d_10pct_clean",
+    "5d_3pct_clean", "5d_5pct_clean", "5d_10pct_clean",
+    "10d_3pct_clean", "10d_5pct_clean", "10d_10pct_clean",
+    "first_3d_3pct", "first_3d_5pct", "first_3d_10pct",
+    "first_5d_3pct", "first_5d_5pct", "first_5d_10pct",
+    "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
 ]
-_PATTERNS = ["cup_handle", "falling_box_breakout", "triangle_convergence", "bb_squeeze"]
 
 # (모델 접두사, 파일 확장자)
 _MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt"), ("et", ".pkl")]
 
+# feature_engineering._FEAT_TRAIN_COLS 와 동일한 순서 — universe_features_daily 컬럼
+_FEAT_COLS = [
+    "ma_cross_5_20", "obv_slope_5d", "high_low_ratio", "body_ratio",
+    "short_balance_ratio", "short_volume_ratio_5d", "short_balance_change_5d",
+    "volume_surge_ratio", "amount_surge_ratio",
+    "price_momentum_3d", "price_momentum_10d",
+    "inst_net_20d", "foreign_exh_change_5d", "roe_proxy",
+    "relative_strength_5d", "combined_net_5d",
+    "kospi_above_ma60", "market_volatility_20d",
+    "grade_S", "grade_A", "grade_B",
+    "bb_width", "atr_14", "atr_ratio_60d",
+    "volume_zscore_20d", "amount_zscore_20d",
+    "rs_20d", "rs_rank_pct", "market_breadth",
+    "breakout_distance_20d", "box_tightness_20d",
+]
+
 
 def _build_feature_df(signals: list[BuySignal]) -> pd.DataFrame:
-    """signals → feature DataFrame (v1 + v2 피처 전체)."""
+    """signals → feature DataFrame. universe_daily + universe_features_daily 직접 읽기.
+
+    학습 파이프라인(feature_engineering.run_train)과 동일한 컬럼명/계산 방식 사용.
+    """
     in_clause = ", ".join(f"'{s.ticker}'" for s in signals)
+    feat_cols = ", ".join(f"uf.{c}" for c in _FEAT_COLS)
 
     conn = get_conn(read_only=True)
     try:
-        # ── v1: 스냅샷 ───────────────────────────────────────────────────────
-        df_snap = conn.execute(f"""
+        df = conn.execute(f"""
             WITH latest AS (
                 SELECT ticker, MAX(date) AS date
-                FROM ohlcv_daily WHERE ticker IN ({in_clause})
+                FROM universe_daily WHERE ticker IN ({in_clause})
                 GROUP BY ticker
             )
-            SELECT o.ticker, o.volume, o.amount, o.market_cap,
-                   o.per, o.pbr, o.div_yield, o.foreign_exh_rate, o.short_ratio,
-                   CASE WHEN o.market_cap > 0 THEN o.amount / o.market_cap ELSE NULL END AS turnover_rate
-            FROM ohlcv_daily o
-            JOIN latest l ON o.ticker = l.ticker AND o.date = l.date
-        """).df()
-
-        # ── v1: 롤링 ─────────────────────────────────────────────────────────
-        df_roll = conn.execute(f"""
-            WITH base AS (
-                SELECT ticker, date, volume, foreign_net, inst_net, foreign_exh_rate,
-                       close / NULLIF(LAG(close, 1) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS daily_ret
-                FROM ohlcv_daily WHERE ticker IN ({in_clause})
-            ),
-            latest AS (SELECT ticker, MAX(date) AS date FROM base GROUP BY ticker),
-            w AS (
-                SELECT ticker, date,
-                       SUM(foreign_net) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS foreign_net_5d,
-                       SUM(inst_net)    OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS inst_net_5d,
-                       LN(NULLIF(AVG(volume)      OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING), 0)) AS log_avg_volume_20d,
-                       STDDEV_POP(daily_ret)       OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING) * SQRT(252) AS hist_volatility_20d,
-                       AVG(foreign_exh_rate)       OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING) AS avg_foreign_exh_rate_20d
-                FROM base
-            )
-            SELECT w.ticker, w.foreign_net_5d, w.inst_net_5d,
-                   w.log_avg_volume_20d, w.hist_volatility_20d, w.avg_foreign_exh_rate_20d
-            FROM w JOIN latest l ON w.ticker = l.ticker AND w.date = l.date
-        """).df()
-
-        # ── v2: 기술적 피처 (최신일 기준) ────────────────────────────────────
-        df_v2 = conn.execute(f"""
-            WITH
-            base AS (SELECT * FROM ohlcv_daily WHERE ticker IN ({in_clause})),
-            latest AS (SELECT ticker, MAX(date) AS max_date FROM base GROUP BY ticker),
-            ma AS (
-                SELECT ticker, date, close, open, high, low, volume, amount,
-                       AVG(close)  OVER w5     AS ma5,
-                       AVG(close)  OVER w20    AS ma20,
-                       AVG(close)  OVER w60    AS ma60,
-                       MAX(high)   OVER w252   AS high_52w,
-                       STDDEV_POP(close) OVER w20 AS std20,
-                       AVG(volume) OVER w20_lag AS avg_vol_20d,
-                       AVG(amount) OVER w20_lag AS avg_amt_20d
-                FROM base
-                WINDOW
-                    w5      AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW),
-                    w20     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
-                    w60     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW),
-                    w252    AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 251 PRECEDING AND CURRENT ROW),
-                    w20_lag AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING)
-            ),
-            rsi_raw AS (
-                SELECT ticker, date,
-                       GREATEST(close - LAG(close,1) OVER (PARTITION BY ticker ORDER BY date), 0) AS gain,
-                       GREATEST(LAG(close,1) OVER (PARTITION BY ticker ORDER BY date) - close, 0) AS loss
-                FROM base
-            ),
-            rsi_avg AS (
-                SELECT ticker, date,
-                       AVG(gain) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_gain,
-                       AVG(loss) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss
-                FROM rsi_raw
-            ),
-            obv_dir AS (
-                SELECT ticker, date, volume,
-                       SIGN(close - LAG(close,1) OVER (PARTITION BY ticker ORDER BY date)) AS dir
-                FROM base
-            ),
-            obv_val AS (
-                SELECT ticker, date,
-                       SUM(volume * dir) OVER (PARTITION BY ticker ORDER BY date) AS obv
-                FROM obv_dir
-            ),
-            obv_slope AS (
-                SELECT ticker, date,
-                       (obv - LAG(obv,5) OVER (PARTITION BY ticker ORDER BY date))
-                           / NULLIF(ABS(LAG(obv,5) OVER (PARTITION BY ticker ORDER BY date)), 0) AS obv_slope_5d
-                FROM obv_val
-            ),
-            short_roll AS (
-                SELECT ticker, date, short_balance, shares,
-                       AVG(short_ratio) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS short_volume_ratio_5d
-                FROM base
-            ),
-            ret AS (
-                SELECT ticker, date,
-                       close / NULLIF(LAG(close,3)  OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS price_momentum_3d,
-                       close / NULLIF(LAG(close,5)  OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS stock_ret_5d,
-                       close / NULLIF(LAG(close,10) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS price_momentum_10d
-                FROM base
-            ),
-            flows AS (
-                SELECT ticker, date,
-                       SUM(foreign_net) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS foreign_net_20d,
-                       SUM(inst_net)    OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS inst_net_20d,
-                       foreign_exh_rate - LAG(foreign_exh_rate, 5) OVER (PARTITION BY ticker ORDER BY date) AS foreign_exh_change_5d
-                FROM base
-            ),
-            short_chg AS (
-                SELECT ticker, date,
-                       (short_balance - LAG(short_balance, 5) OVER (PARTITION BY ticker ORDER BY date))
-                           / NULLIF(ABS(LAG(short_balance, 5) OVER (PARTITION BY ticker ORDER BY date)), 0) AS short_balance_change_5d
-                FROM base
-            ),
-            valuation AS (
-                SELECT ticker, date,
-                       CASE WHEN bps > 0 THEN CAST(eps AS DOUBLE) / NULLIF(bps, 0) ELSE NULL END AS roe_proxy
-                FROM base
-            ),
-            combined AS (
-                SELECT
-                    ma.ticker,
-                    ma.close / NULLIF(ma.ma20, 0) - 1                             AS close_to_20ma_ratio,
-                    ma.close / NULLIF(ma.ma60, 0) - 1                             AS close_to_60ma_ratio,
-                    ma.close / NULLIF(ma.high_52w, 0) - 1                         AS close_to_52w_high,
-                    ma.close / NULLIF(ma.ma5, 0) - 1                              AS close_to_5ma_ratio,
-                    CASE WHEN ma.ma5 >= ma.ma20 THEN 1 ELSE 0 END                 AS ma_cross_5_20,
-                    (ma.close - (ma.ma20 - 2*ma.std20)) / NULLIF(4*ma.std20, 0)  AS bb_position,
-                    CASE WHEN rsi_avg.avg_loss = 0 THEN 100.0
-                         ELSE 100 - 100 / (1 + rsi_avg.avg_gain / NULLIF(rsi_avg.avg_loss, 0))
-                    END                                                            AS rsi_14,
-                    obv_slope.obv_slope_5d,
-                    (ma.high - ma.low) / NULLIF(ma.close, 0)                     AS high_low_ratio,
-                    (ma.close - ma.open) / NULLIF(ma.high - ma.low, 0)           AS body_ratio,
-                    sr.short_balance / NULLIF(sr.shares, 0)                       AS short_balance_ratio,
-                    sr.short_volume_ratio_5d,
-                    short_chg.short_balance_change_5d,
-                    ma.volume / NULLIF(ma.avg_vol_20d, 0)                         AS volume_surge_ratio,
-                    ma.amount / NULLIF(ma.avg_amt_20d, 0)                         AS amount_surge_ratio,
-                    ret.price_momentum_3d,
-                    ret.price_momentum_10d,
-                    flows.foreign_net_20d,
-                    flows.inst_net_20d,
-                    flows.foreign_exh_change_5d,
-                    valuation.roe_proxy,
-                    ret.stock_ret_5d
-                FROM ma
-                JOIN rsi_avg   ON ma.ticker = rsi_avg.ticker   AND ma.date = rsi_avg.date
-                JOIN obv_slope ON ma.ticker = obv_slope.ticker AND ma.date = obv_slope.date
-                JOIN short_roll sr ON ma.ticker = sr.ticker    AND ma.date = sr.date
-                JOIN ret       ON ma.ticker = ret.ticker       AND ma.date = ret.date
-                JOIN flows     ON ma.ticker = flows.ticker     AND ma.date = flows.date
-                JOIN short_chg ON ma.ticker = short_chg.ticker AND ma.date = short_chg.date
-                JOIN valuation ON ma.ticker = valuation.ticker AND ma.date = valuation.date
-                JOIN latest    ON ma.ticker = latest.ticker    AND ma.date = latest.max_date
-            )
-            SELECT * FROM combined
-        """).df()
-
-        # ── v2: 시장 피처 (최신일) ───────────────────────────────────────────
-        df_mkt = conn.execute("""
-            WITH kospi_ret AS (
-                SELECT date, close,
-                       close / NULLIF(LAG(close,1)  OVER (ORDER BY date), 0) - 1 AS daily_ret,
-                       close / NULLIF(LAG(close,5)  OVER (ORDER BY date), 0) - 1 AS kospi_return_5d,
-                       close / NULLIF(LAG(close,20) OVER (ORDER BY date), 0) - 1 AS kospi_return_20d
-                FROM market_index WHERE ticker = '1001'
-            )
             SELECT
-                kospi_return_20d,
-                kospi_return_5d,
-                CASE WHEN close >= AVG(close) OVER (ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
-                     THEN 1 ELSE 0 END AS kospi_above_ma60,
-                STDDEV_POP(daily_ret) OVER (ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)
-                    * SQRT(252) AS market_volatility_20d
-            FROM kospi_ret
-            ORDER BY date DESC
-            LIMIT 1
+                ud.ticker,
+                ud.volume, ud.market_cap, ud.per, ud.pbr, ud.turnover_rate,
+                ud.ma5_ratio, ud.ma20_ratio, ud.ma60_ratio, ud.ma120_ratio,
+                ud.rsi_14, ud.bb_position, ud.hist_vol_20d, ud.close_to_52w_high,
+                ud.foreign_net_5d, ud.inst_net_5d, ud.foreign_net_20d, ud.volume_surge_5d,
+                ud.kospi_ret_5d  AS kospi_return_5d,
+                ud.kospi_ret_20d AS kospi_return_20d,
+                ud.vol_score_approx,
+                {feat_cols}
+            FROM universe_daily ud
+            JOIN universe_features_daily uf ON ud.date = uf.date AND ud.ticker = uf.ticker
+            JOIN latest l ON ud.ticker = l.ticker AND ud.date = l.date
         """).df()
-
     finally:
         conn.close()
-
-    rows = []
-    for s in signals:
-        row = {
-            "ticker": s.ticker,
-            "vol_score": s.volume_score,
-            "total_score": s.total_score,
-            "trend_score": s.trend_score,
-            "pattern_score": s.pattern_score,
-            "risk_reward": s.risk_reward,
-            "grade_S": int(s.grade == "S"),
-            "grade_A": int(s.grade == "A"),
-            "grade_B": int(s.grade == "B"),
-            "sv_live_v1": 0,
-            "sv_live_v2": 1,
-        }
-        for pat in _PATTERNS:
-            row[f"pattern_{pat}"] = int(s.pattern == pat)
-        rows.append(row)
-
-    df_sig = pd.DataFrame(rows)
-
-    # v1 병합
-    df = df_sig.merge(df_snap, on="ticker", how="left").merge(df_roll, on="ticker", how="left")
-
-    # v2 OHLCV 병합
-    df = df.merge(df_v2, on="ticker", how="left")
-
-    # v2 파생: 상대강도, 합산수급
-    if "stock_ret_5d" in df.columns and "kospi_return_5d" in df_mkt.columns:
-        kospi_ret_5d = df_mkt["kospi_return_5d"].iloc[0] if not df_mkt.empty else 0.0
-        df["relative_strength_5d"] = df["stock_ret_5d"] - kospi_ret_5d
-        df = df.drop(columns=["stock_ret_5d"])
-    if "foreign_net_5d" in df.columns and "inst_net_5d" in df.columns:
-        df["combined_net_5d"] = df["foreign_net_5d"] + df["inst_net_5d"]
-
-    # v2 시장 피처: 모든 종목에 동일하게 적용
-    if not df_mkt.empty:
-        for col in df_mkt.columns:
-            df[col] = df_mkt[col].iloc[0]
-
     return df
 
 
@@ -288,7 +109,7 @@ def _predict_one(prefix: str, ext: str, label: str, df: pd.DataFrame) -> np.ndar
 
 
 def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
-    """17개 라벨 추론. {ticker: {label: prob}} 반환. XGB + LGBM + ET soft voting."""
+    """18개 라벨 추론. {ticker: {label: prob}} 반환. XGB + LGBM + ET soft voting."""
     if not signals:
         return {}
 
@@ -306,214 +127,41 @@ def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
             if ticker in result:
                 result[ticker][label] = float(prob)
 
-    logger.info("ML 추론 완료: %d종목 17라벨 (soft-voting)", len(signals))
+    logger.info("ML 추론 완료: %d종목 18라벨 (soft-voting)", len(signals))
     return result
 
 
 def score_signals(signals: list[BuySignal]) -> None:
-    """signals의 각 BuySignal.xgb_prob(3d_5pct)를 인플레이스 업데이트."""
+    """signals의 각 BuySignal.xgb_prob(3d_5pct_clean)를 인플레이스 업데이트."""
     probs = score_all_labels(signals)
     for s in signals:
-        s.xgb_prob = probs.get(s.ticker, {}).get("3d_5pct")
+        s.xgb_prob = probs.get(s.ticker, {}).get("3d_5pct_clean")
 
 
 def _build_feature_df_universe(tickers: list[str], date_str: str) -> pd.DataFrame:
-    """전종목 추론용 피처 DataFrame. 신호 피처(vol_score/grade/pattern)는 0으로 채움."""
+    """전종목 추론용 피처 DataFrame. universe_daily + universe_features_daily 직접 읽기."""
     in_clause = ", ".join(f"'{t}'" for t in tickers)
+    feat_cols = ", ".join(f"uf.{c}" for c in _FEAT_COLS)
 
     conn = get_conn(read_only=True)
     try:
-        df_snap = conn.execute(f"""
-            SELECT ticker, volume, amount, market_cap,
-                   per, pbr, div_yield, foreign_exh_rate, short_ratio,
-                   CASE WHEN market_cap > 0 THEN amount / market_cap ELSE NULL END AS turnover_rate
-            FROM ohlcv_daily
-            WHERE ticker IN ({in_clause}) AND date = CAST(? AS DATE)
-        """, [date_str]).df()
-
-        df_roll = conn.execute(f"""
-            WITH base AS (
-                SELECT ticker, date, volume, foreign_net, inst_net, foreign_exh_rate,
-                       close / NULLIF(LAG(close, 1) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS daily_ret
-                FROM ohlcv_daily WHERE ticker IN ({in_clause})
-            ),
-            w AS (
-                SELECT ticker, date,
-                       SUM(foreign_net) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS foreign_net_5d,
-                       SUM(inst_net)    OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS inst_net_5d,
-                       LN(NULLIF(AVG(volume) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING), 0)) AS log_avg_volume_20d,
-                       STDDEV_POP(daily_ret) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING) * SQRT(252) AS hist_volatility_20d,
-                       AVG(foreign_exh_rate) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 21 PRECEDING AND 1 PRECEDING) AS avg_foreign_exh_rate_20d
-                FROM base
-            )
-            SELECT ticker, foreign_net_5d, inst_net_5d,
-                   log_avg_volume_20d, hist_volatility_20d, avg_foreign_exh_rate_20d
-            FROM w WHERE date = CAST(? AS DATE)
-        """, [date_str]).df()
-
-        df_v2 = conn.execute(f"""
-            WITH
-            base AS (SELECT * FROM ohlcv_daily WHERE ticker IN ({in_clause})),
-            ma AS (
-                SELECT ticker, date, close, open, high, low, volume, amount,
-                       AVG(close)  OVER w5     AS ma5,
-                       AVG(close)  OVER w20    AS ma20,
-                       AVG(close)  OVER w60    AS ma60,
-                       MAX(high)   OVER w252   AS high_52w,
-                       STDDEV_POP(close) OVER w20 AS std20,
-                       AVG(volume) OVER w20_lag AS avg_vol_20d,
-                       AVG(amount) OVER w20_lag AS avg_amt_20d
-                FROM base
-                WINDOW
-                    w5      AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW),
-                    w20     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW),
-                    w60     AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW),
-                    w252    AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 251 PRECEDING AND CURRENT ROW),
-                    w20_lag AS (PARTITION BY ticker ORDER BY date ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING)
-            ),
-            rsi_raw AS (
-                SELECT ticker, date,
-                       GREATEST(close - LAG(close,1) OVER (PARTITION BY ticker ORDER BY date), 0) AS gain,
-                       GREATEST(LAG(close,1) OVER (PARTITION BY ticker ORDER BY date) - close, 0) AS loss
-                FROM base
-            ),
-            rsi_avg AS (
-                SELECT ticker, date,
-                       AVG(gain) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_gain,
-                       AVG(loss) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 13 PRECEDING AND CURRENT ROW) AS avg_loss
-                FROM rsi_raw
-            ),
-            obv_dir AS (
-                SELECT ticker, date, volume,
-                       SIGN(close - LAG(close,1) OVER (PARTITION BY ticker ORDER BY date)) AS dir
-                FROM base
-            ),
-            obv_val AS (
-                SELECT ticker, date,
-                       SUM(volume * dir) OVER (PARTITION BY ticker ORDER BY date) AS obv
-                FROM obv_dir
-            ),
-            obv_slope AS (
-                SELECT ticker, date,
-                       (obv - LAG(obv,5) OVER (PARTITION BY ticker ORDER BY date))
-                           / NULLIF(ABS(LAG(obv,5) OVER (PARTITION BY ticker ORDER BY date)), 0) AS obv_slope_5d
-                FROM obv_val
-            ),
-            short_roll AS (
-                SELECT ticker, date, short_balance, shares,
-                       AVG(short_ratio) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS short_volume_ratio_5d
-                FROM base
-            ),
-            ret AS (
-                SELECT ticker, date,
-                       close / NULLIF(LAG(close,3)  OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS price_momentum_3d,
-                       close / NULLIF(LAG(close,5)  OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS stock_ret_5d,
-                       close / NULLIF(LAG(close,10) OVER (PARTITION BY ticker ORDER BY date), 0) - 1 AS price_momentum_10d
-                FROM base
-            ),
-            flows AS (
-                SELECT ticker, date,
-                       SUM(foreign_net) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS foreign_net_20d,
-                       SUM(inst_net)    OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS inst_net_20d,
-                       foreign_exh_rate - LAG(foreign_exh_rate, 5) OVER (PARTITION BY ticker ORDER BY date) AS foreign_exh_change_5d
-                FROM base
-            ),
-            short_chg AS (
-                SELECT ticker, date,
-                       (short_balance - LAG(short_balance, 5) OVER (PARTITION BY ticker ORDER BY date))
-                           / NULLIF(ABS(LAG(short_balance, 5) OVER (PARTITION BY ticker ORDER BY date)), 0) AS short_balance_change_5d
-                FROM base
-            ),
-            valuation AS (
-                SELECT ticker, date,
-                       CASE WHEN bps > 0 THEN CAST(eps AS DOUBLE) / NULLIF(bps, 0) ELSE NULL END AS roe_proxy
-                FROM base
-            ),
-            combined AS (
-                SELECT
-                    ma.ticker,
-                    ma.close / NULLIF(ma.ma20, 0) - 1                             AS close_to_20ma_ratio,
-                    ma.close / NULLIF(ma.ma60, 0) - 1                             AS close_to_60ma_ratio,
-                    ma.close / NULLIF(ma.high_52w, 0) - 1                         AS close_to_52w_high,
-                    ma.close / NULLIF(ma.ma5, 0) - 1                              AS close_to_5ma_ratio,
-                    CASE WHEN ma.ma5 >= ma.ma20 THEN 1 ELSE 0 END                 AS ma_cross_5_20,
-                    (ma.close - (ma.ma20 - 2*ma.std20)) / NULLIF(4*ma.std20, 0)  AS bb_position,
-                    CASE WHEN rsi_avg.avg_loss = 0 THEN 100.0
-                         ELSE 100 - 100 / (1 + rsi_avg.avg_gain / NULLIF(rsi_avg.avg_loss, 0))
-                    END                                                            AS rsi_14,
-                    obv_slope.obv_slope_5d,
-                    (ma.high - ma.low) / NULLIF(ma.close, 0)                     AS high_low_ratio,
-                    (ma.close - ma.open) / NULLIF(ma.high - ma.low, 0)           AS body_ratio,
-                    sr.short_balance / NULLIF(sr.shares, 0)                       AS short_balance_ratio,
-                    sr.short_volume_ratio_5d,
-                    short_chg.short_balance_change_5d,
-                    ma.volume / NULLIF(ma.avg_vol_20d, 0)                         AS volume_surge_ratio,
-                    ma.amount / NULLIF(ma.avg_amt_20d, 0)                         AS amount_surge_ratio,
-                    ret.price_momentum_3d,
-                    ret.price_momentum_10d,
-                    flows.foreign_net_20d,
-                    flows.inst_net_20d,
-                    flows.foreign_exh_change_5d,
-                    valuation.roe_proxy,
-                    ret.stock_ret_5d
-                FROM ma
-                JOIN rsi_avg   ON ma.ticker = rsi_avg.ticker   AND ma.date = rsi_avg.date
-                JOIN obv_slope ON ma.ticker = obv_slope.ticker AND ma.date = obv_slope.date
-                JOIN short_roll sr ON ma.ticker = sr.ticker    AND ma.date = sr.date
-                JOIN ret       ON ma.ticker = ret.ticker       AND ma.date = ret.date
-                JOIN flows     ON ma.ticker = flows.ticker     AND ma.date = flows.date
-                JOIN short_chg ON ma.ticker = short_chg.ticker AND ma.date = short_chg.date
-                JOIN valuation ON ma.ticker = valuation.ticker AND ma.date = valuation.date
-                WHERE ma.date = CAST(? AS DATE)
-            )
-            SELECT * FROM combined
-        """, [date_str]).df()
-
-        df_mkt = conn.execute("""
-            WITH kospi_ret AS (
-                SELECT date, close,
-                       close / NULLIF(LAG(close,1)  OVER (ORDER BY date), 0) - 1 AS daily_ret,
-                       close / NULLIF(LAG(close,5)  OVER (ORDER BY date), 0) - 1 AS kospi_return_5d,
-                       close / NULLIF(LAG(close,20) OVER (ORDER BY date), 0) - 1 AS kospi_return_20d
-                FROM market_index WHERE ticker = '1001'
-            )
+        df = conn.execute(f"""
             SELECT
-                kospi_return_20d,
-                kospi_return_5d,
-                CASE WHEN close >= AVG(close) OVER (ORDER BY date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)
-                     THEN 1 ELSE 0 END AS kospi_above_ma60,
-                STDDEV_POP(daily_ret) OVER (ORDER BY date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW)
-                    * SQRT(252) AS market_volatility_20d
-            FROM kospi_ret
-            ORDER BY date DESC
-            LIMIT 1
-        """).df()
-
+                ud.ticker,
+                ud.volume, ud.market_cap, ud.per, ud.pbr, ud.turnover_rate,
+                ud.ma5_ratio, ud.ma20_ratio, ud.ma60_ratio, ud.ma120_ratio,
+                ud.rsi_14, ud.bb_position, ud.hist_vol_20d, ud.close_to_52w_high,
+                ud.foreign_net_5d, ud.inst_net_5d, ud.foreign_net_20d, ud.volume_surge_5d,
+                ud.kospi_ret_5d  AS kospi_return_5d,
+                ud.kospi_ret_20d AS kospi_return_20d,
+                ud.vol_score_approx,
+                {feat_cols}
+            FROM universe_daily ud
+            JOIN universe_features_daily uf ON ud.date = uf.date AND ud.ticker = uf.ticker
+            WHERE ud.ticker IN ({in_clause}) AND ud.date = CAST(? AS DATE)
+        """, [date_str]).df()
     finally:
         conn.close()
-
-    df_sig = pd.DataFrame([{
-        "ticker": t,
-        "vol_score": 0, "total_score": 0, "trend_score": 0,
-        "pattern_score": 0, "risk_reward": 0.0,
-        "grade_S": 0, "grade_A": 0, "grade_B": 0,
-        "sv_live_v1": 0, "sv_live_v2": 1,
-        **{f"pattern_{pat}": 0 for pat in _PATTERNS},
-    } for t in tickers])
-
-    df = df_sig.merge(df_snap, on="ticker", how="left").merge(df_roll, on="ticker", how="left")
-    df = df.merge(df_v2, on="ticker", how="left")
-
-    if "stock_ret_5d" in df.columns and not df_mkt.empty:
-        kospi_ret_5d = df_mkt["kospi_return_5d"].iloc[0] if not df_mkt.empty else 0.0
-        df["relative_strength_5d"] = df["stock_ret_5d"] - kospi_ret_5d
-        df = df.drop(columns=["stock_ret_5d"])
-    if "foreign_net_5d" in df.columns and "inst_net_5d" in df.columns:
-        df["combined_net_5d"] = df["foreign_net_5d"] + df["inst_net_5d"]
-    if not df_mkt.empty:
-        for col in df_mkt.columns:
-            df[col] = df_mkt[col].iloc[0]
-
     return df
 
 
@@ -525,7 +173,7 @@ def score_universe_all(date_str: str) -> dict[str, dict[str, float]]:
     conn = get_conn(read_only=True)
     try:
         tickers = [r[0] for r in conn.execute(
-            "SELECT DISTINCT ticker FROM ohlcv_daily WHERE date = CAST(? AS DATE)", [date_str]
+            "SELECT DISTINCT ticker FROM universe_daily WHERE date = CAST(? AS DATE)", [date_str]
         ).fetchall()]
     finally:
         conn.close()
