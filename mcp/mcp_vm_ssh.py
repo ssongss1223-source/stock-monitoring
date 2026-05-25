@@ -1,7 +1,8 @@
-"""VM SSH MCP server — IAP TCP 터널 + paramiko."""
+"""VM SSH MCP server — IAP TCP 터널 + paramiko (persistent connection)."""
 import asyncio
 import socket
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -22,6 +23,11 @@ SSH_KEY = str(Path.home() / ".ssh" / "google_compute_engine")
 
 server = Server("vm-ssh")
 
+# ── Persistent connection state ────────────────────────────────────────────────
+_lock = threading.Lock()
+_tunnel: subprocess.Popen | None = None
+_client: paramiko.SSHClient | None = None
+
 
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -29,8 +35,7 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-def _wait_for_port(port: int, timeout: int = 30) -> bool:
-    """포트가 열릴 때까지 폴링 (gcloud 출력 메시지에 의존하지 않음)."""
+def _wait_for_port(port: int, timeout: int = 35) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
         try:
@@ -41,11 +46,50 @@ def _wait_for_port(port: int, timeout: int = 30) -> bool:
     return False
 
 
-def _ssh_run(command: str, timeout: int = 60) -> str:
-    port = _free_port()
+def _teardown() -> None:
+    """기존 터널과 SSH 클라이언트를 정리."""
+    global _tunnel, _client
+    if _client is not None:
+        try:
+            _client.close()
+        except Exception:
+            pass
+        _client = None
+    if _tunnel is not None:
+        _tunnel.terminate()
+        try:
+            _tunnel.wait(timeout=3)
+        except subprocess.TimeoutExpired:
+            _tunnel.kill()
+        _tunnel = None
 
-    _NO_WINDOW = 0x08000000  # CREATE_NO_WINDOW — 콘솔 없는 VSCode 환경에서 필수
-    tunnel = subprocess.Popen(
+
+def _is_alive() -> bool:
+    """현재 SSH 연결이 살아있는지 확인. 채널 오픈 테스트까지 수행."""
+    if _client is None:
+        return False
+    transport = _client.get_transport()
+    if transport is None or not transport.is_active():
+        return False
+    try:
+        transport.send_ignore()
+        # send_ignore만으로는 exec_command 가능 여부를 보장하지 못함
+        # 실제 세션 채널이 열리는지 짧게 테스트
+        chan = transport.open_session(timeout=5)
+        chan.close()
+        return True
+    except Exception:
+        return False
+
+
+def _connect() -> None:
+    """새 IAP 터널 + SSH 연결 수립. 실패 시 예외 발생."""
+    global _tunnel, _client
+    _teardown()
+
+    port = _free_port()
+    _NO_WINDOW = 0x08000000
+    _tunnel = subprocess.Popen(
         [
             "cmd", "/c", _GCLOUD, "compute", "start-iap-tunnel",
             f"--project={VM_PROJECT}",
@@ -59,36 +103,60 @@ def _ssh_run(command: str, timeout: int = 60) -> str:
         creationflags=_NO_WINDOW,
     )
 
-    try:
-        if not _wait_for_port(port, timeout=35):
-            rc = tunnel.poll()
-            return f"ERROR: IAP tunnel startup timeout (35s), process exit={rc}"
+    if not _wait_for_port(port):
+        rc = _tunnel.poll()
+        _teardown()
+        raise RuntimeError(f"IAP tunnel startup timeout (35s), process exit={rc}")
 
-        client = paramiko.SSHClient()
-        client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        client.connect(
-            "localhost", port=port,
-            username=VM_USER, key_filename=SSH_KEY,
-            timeout=10, banner_timeout=15,
+    client = paramiko.SSHClient()
+    client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+    client.connect(
+        "localhost", port=port,
+        username=VM_USER, key_filename=SSH_KEY,
+        timeout=10, banner_timeout=15,
+    )
+    # keepalive: 60초마다 패킷 전송 → GCP IAP idle timeout 방지
+    client.get_transport().set_keepalive(60)
+    # IAP 터널이 포트를 열었더라도 SSH 세션 채널이 안정화되기까지 짧게 대기
+    time.sleep(1)
+    _client = client
+
+
+def _get_client() -> paramiko.SSHClient:
+    """연결이 살아있으면 재사용, 끊겼으면 재연결."""
+    if not _is_alive():
+        _connect()
+    return _client
+
+
+def _ssh_run(command: str, timeout: int = 60) -> str:
+    # 리다이렉트(> file)가 있으면 paramiko가 출력을 읽지 못함 → 사용 금지
+    if " > " in command or " >> " in command:
+        return (
+            "ERROR: ssh_run에 출력 리다이렉트(> / >>)를 쓰면 paramiko가 출력을 읽지 못합니다. "
+            "리다이렉트 없이 명령을 실행하세요. 백그라운드 실행이 필요하면 screen -dm을 사용하세요."
         )
-        try:
-            _, stdout, stderr = client.exec_command(command, timeout=timeout)
-            out = stdout.read().decode("utf-8", errors="replace").strip()
-            err = stderr.read().decode("utf-8", errors="replace").strip()
-            exit_code = stdout.channel.recv_exit_status()
-            if exit_code != 0 and not out:
-                return f"ERROR (exit {exit_code}): {err}"
-            return out or err
-        finally:
-            client.close()
-    except Exception as e:
-        return f"ERROR: {e}"
-    finally:
-        tunnel.terminate()
-        try:
-            tunnel.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            tunnel.kill()
+
+    with _lock:
+        for attempt in range(2):
+            try:
+                client = _get_client()
+                _, stdout, stderr = client.exec_command(command, timeout=timeout)
+                out = stdout.read().decode("utf-8", errors="replace").strip()
+                err = stderr.read().decode("utf-8", errors="replace").strip()
+                exit_code = stdout.channel.recv_exit_status()
+                if exit_code != 0:
+                    combined = "\n".join(filter(None, [out, err]))
+                    return f"ERROR (exit {exit_code}): {combined or '(no output)'}"
+                return out or err or "(completed with no output)"
+            except Exception as e:
+                if attempt == 0:
+                    # 연결 끊김 → 강제 재연결 후 1회 재시도
+                    _teardown()
+                    time.sleep(5)  # IAP 터널 정리 + 재연결 안정화 대기
+                else:
+                    return f"ERROR: {e}"
+    return "ERROR: unreachable"
 
 
 async def _run(command: str, timeout: int = 60) -> str:
