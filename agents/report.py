@@ -23,23 +23,34 @@ _ACTION_LABEL = {
 }
 _PATTERN_GRADE_EMOJI = {"HIGH": "🟢", "MEDIUM": "🟡", "LOW": "🔴"}
 _LABEL_DISPLAY = {
-    "3d_3pct": "3일+3%", "3d_5pct": "3일+5%", "3d_10pct": "3일+10%",
-    "5d_3pct": "5일+3%", "5d_5pct": "5일+5%", "5d_10pct": "5일+10%",
-    "10d_3pct": "10일+3%", "10d_5pct": "10일+5%", "10d_10pct": "10일+10%",
-    "3d_3pct_c2": "3일+3%×2", "3d_5pct_c2": "3일+5%×2",
-    "5d_3pct_c2": "5일+3%×2", "5d_5pct_c2": "5일+5%×2", "5d_10pct_c2": "5일+10%×2",
-    "10d_3pct_c2": "10일+3%×2", "10d_5pct_c2": "10일+5%×2", "10d_10pct_c2": "10일+10%×2",
+    "3d_3pct_clean": "3일+3%", "3d_5pct_clean": "3일+5%", "3d_10pct_clean": "3일+10%",
+    "5d_3pct_clean": "5일+3%", "5d_5pct_clean": "5일+5%", "5d_10pct_clean": "5일+10%",
+    "10d_3pct_clean": "10일+3%", "10d_5pct_clean": "10일+5%", "10d_10pct_clean": "10일+10%",
+    "first_3d_3pct": "3일+3%(첫도달)", "first_3d_5pct": "3일+5%(첫도달)", "first_3d_10pct": "3일+10%(첫도달)",
+    "first_5d_3pct": "5일+3%(첫도달)", "first_5d_5pct": "5일+5%(첫도달)", "first_5d_10pct": "5일+10%(첫도달)",
+    "first_10d_3pct": "10일+3%(첫도달)", "first_10d_5pct": "10일+5%(첫도달)", "first_10d_10pct": "10일+10%(첫도달)",
+}
+# 실제 배치 추론(XGB+LGBM soft voting)과 일치하는 라벨별 mean AUC (학습 시점 측정)
+_LABEL_AUC = {
+    "3d_3pct_clean": 0.553, "3d_5pct_clean": 0.579, "3d_10pct_clean": 0.640,
+    "5d_3pct_clean": 0.550, "5d_5pct_clean": 0.559, "5d_10pct_clean": 0.619,
+    "10d_3pct_clean": 0.545, "10d_5pct_clean": 0.554, "10d_10pct_clean": 0.574,
+    "first_3d_3pct": 0.558, "first_3d_5pct": 0.594, "first_3d_10pct": 0.656,
+    "first_5d_3pct": 0.548, "first_5d_5pct": 0.565, "first_5d_10pct": 0.624,
+    "first_10d_3pct": 0.543, "first_10d_5pct": 0.552, "first_10d_10pct": 0.575,
 }
 _PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
 _GAIN_PCT     = {"3pct": 0.03, "5pct": 0.05, "10pct": 0.10}
 _DAYS_MAP     = {"3d": 3, "5d": 5, "10d": 10}
 _SHORT_LABELS = [
-    "3d_3pct", "3d_5pct", "3d_10pct", "5d_3pct", "5d_5pct", "5d_10pct",
-    "3d_3pct_c2", "3d_5pct_c2", "5d_3pct_c2", "5d_5pct_c2", "5d_10pct_c2",
+    "3d_3pct_clean", "3d_5pct_clean", "3d_10pct_clean",
+    "5d_3pct_clean", "5d_5pct_clean", "5d_10pct_clean",
+    "first_3d_3pct", "first_3d_5pct", "first_3d_10pct",
+    "first_5d_3pct", "first_5d_5pct", "first_5d_10pct",
 ]
 _SWING_LABELS = [
-    "10d_3pct", "10d_5pct", "10d_10pct",
-    "10d_3pct_c2", "10d_5pct_c2", "10d_10pct_c2",
+    "10d_3pct_clean", "10d_5pct_clean", "10d_10pct_clean",
+    "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
 ]
 
 
@@ -192,9 +203,14 @@ def _loss_pct(s: BuySignal) -> float:
     return 0.03
 
 
+def _parse_label(label: str) -> tuple[str, str]:
+    """라벨에서 (days_key, gain_key) 추출. first_ 접두사, _clean 접미사 무시."""
+    parts = [p for p in label.split("_") if p not in ("first", "clean")]
+    return parts[0], parts[1]
+
+
 def _ev_per_day(label: str, prob: float, loss: float) -> float:
-    parts = label.split("_")
-    d_str, p_str = parts[0], parts[1]
+    d_str, p_str = _parse_label(label)
     ev = prob * _GAIN_PCT[p_str] - (1 - prob) * loss
     return ev / _DAYS_MAP[d_str]
 
@@ -202,10 +218,11 @@ def _ev_per_day(label: str, prob: float, loss: float) -> float:
 def _label_tiebreak(label: Optional[str]) -> tuple:
     if not label:
         return (999, 0.0)
-    parts = label.split("_")
-    d = _DAYS_MAP.get(parts[0], 999)
-    g = _GAIN_PCT.get(parts[1], 0.0) if len(parts) > 1 else 0.0
-    return (d, -g)
+    try:
+        d_str, g_str = _parse_label(label)
+    except (IndexError, KeyError):
+        return (999, 0.0)
+    return (_DAYS_MAP.get(d_str, 999), -_GAIN_PCT.get(g_str, 0.0))
 
 
 def _four_groups(
@@ -242,12 +259,14 @@ def _four_groups(
 
     def sort_key(item: tuple):
         s, prob, label = item
+        auc = _LABEL_AUC.get(label, 0.5)
+        score = prob * auc  # AUC 가중 확률 — 신뢰도 반영
         lb = _label_tiebreak(label)
         pr = pr_by_ticker.get(s.ticker)
         pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
         loss = _loss_pct(s)
         ev = _ev_per_day(label, prob, loss)
-        return (-prob, lb[0], lb[1], pg, -s.risk_reward, -ev)
+        return (-score, lb[0], lb[1], pg, -s.risk_reward, -ev)
 
     large_short = sorted(buckets["ls"].values(), key=sort_key)[:3]
     large_short_tickers = {s.ticker for s, _, _ in large_short}
@@ -281,14 +300,15 @@ def _sort_signals(
     signals: list[BuySignal],
     pr_by_ticker: dict[str, PatternLearningResult],
 ) -> list[BuySignal]:
-    """ML확률 → (days 짧고 % 높은 라벨) → 패턴등급 → 손익비, 상위 10종목 cap."""
+    """AUC가중 ML score → (days 짧고 % 높은 라벨) → 패턴등급 → 손익비, 상위 10종목 cap."""
     def _key(s: BuySignal):
-        ml = -(s.xgb_prob or 0.0)
+        auc = _LABEL_AUC.get(s.best_label or "", 0.5)
+        score = -((s.xgb_prob or 0.0) * auc)
         lb = _label_tiebreak(s.best_label)
         pr = pr_by_ticker.get(s.ticker)
         pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
         rr = -s.risk_reward
-        return (ml, lb[0], lb[1], pg, rr)
+        return (score, lb[0], lb[1], pg, rr)
     return sorted(signals, key=_key)[:10]
 
 
@@ -337,7 +357,8 @@ def _stock_entry(
     if prob is not None:
         label_name = _LABEL_DISPLAY.get(group_label, group_label)
         ev_pct = _ev_per_day(group_label, prob, _loss_pct(s)) * 100
-        ml_line = f"  [{label_name}] EV: {ev_pct:.1f}%/일, ML: {prob:.0%}\n"
+        auc = _LABEL_AUC.get(group_label, 0.5)
+        ml_line = f"  [{label_name}] ML: {prob:.0%} (AUC {auc:.2f}) | EV: {ev_pct:.1f}%/일\n"
     entry = (
         f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
         + ml_line +
