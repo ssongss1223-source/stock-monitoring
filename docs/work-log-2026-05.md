@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-25 세션 49 — 파이프라인 배포 버그 수정 + 학습 시작 + 문서 정비
+- 작업: feature_engineering + train_models 파이프라인 전체 배포 및 실행, memory/CLAUDE.md 정비
+- 변경 사항:
+  - `scripts/feature_engineering.py`: atr CTE split (nested window), up_days CTE split, init_db() 추가, date→signal_date 리네임
+  - `scripts/deploy_and_run.sh`: 로그 init chmod 666 수정 (KHSong도 RELABEL_DONE 마커 쓰기 가능)
+  - `scripts/train_models.py`: 라벨 완료 시 `체크포인트: {label_key}` 출력 추가 (notify 감지용)
+  - `scripts/notify_pipeline.sh`: 재시작 안전 로직 + grep-c→wc-l + tr 구분자 수정 (49af2cb)
+  - `CLAUDE.md`: 프로젝트별 규칙 추가 — VM 권한, DuckDB 중첩 window 금지, 파이프라인 실행 규칙 (81abee0)
+- 관련 파일: 위 5개 파일
+- 메모:
+  - feature_engineering BUILD 완료: universe_features_daily 230,531행, feature_matrix.parquet 46컬럼
+  - train_models 현재 10/18 라벨 완료, 약 10시간 후 종료 예상
+  - notify per-label 알림은 이번 run 비작동 (구버전 프로세스로 시작됨), 다음 재학습부터 정상
+  - memory 파일 위치(~/.claude/)가 프로젝트 외부라 git 미관리 → 핵심 규칙은 CLAUDE.md로 이전
+- 다음 아이디어: TRAIN_DONE 후 AUC 확인 + pred_* 컬럼 18개로 업데이트 + 서비스 재시작
+
+---
+
 ## 2026-05-24 세션 48 — 라벨 18개 재설계 + 재라벨링 완료 + 인프라 개선
 - 작업: 라벨 구조 변경, 재라벨링 완료, 파이프라인 인프라 전면 개선
 - 변경 사항:
