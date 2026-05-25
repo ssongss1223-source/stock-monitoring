@@ -100,10 +100,17 @@ ${LAST_CKPT}"
 최근 로그: $LAST_LOG"
 
         elif [ "$CURRENT_PHASE" = "train" ]; then
-            LAST_LOG=$(grep "^→ 최고 모델:" "$LOG" 2>/dev/null | tail -3 | tr '\n' ' | ')
-            send "[학습 진행 중] $(date '+%H:%M')
+            DONE_LABELS=$(grep "^체크포인트:" "$LOG" 2>/dev/null | sed 's/체크포인트: //' | sed 's/ —.*//' | tr '\n' ', ' | sed 's/, $//')
+            if ! pgrep -f "train_models" > /dev/null 2>&1; then
+                send "[학습 중단 감지] train_models 프로세스 없음 → 자동 재시작 $(date '+%H:%M')
+${LABEL_DONE_COUNT}/18 라벨 완료 상태에서 재시작
+완료: ${DONE_LABELS:-없음}"
+                sudo -u stock bash -c "export PYTHONPATH=/opt/stock-monitor && cd /opt/stock-monitor && nohup bash -c '/opt/stock-monitor/.venv/bin/python scripts/train_models.py >> /opt/stock-monitor/logs/pipeline.log 2>&1 && echo TRAIN_DONE >> /opt/stock-monitor/logs/pipeline.log' > /dev/null 2>&1 &"
+            else
+                send "[학습 진행 중] $(date '+%H:%M')
 ${LABEL_DONE_COUNT}/18 라벨 완료, 경과: ${ELAPSED_H}시간 ${ELAPSED_M}분
-최근: $LAST_LOG"
+완료: ${DONE_LABELS:-없음}"
+            fi
         fi
     fi
 done
