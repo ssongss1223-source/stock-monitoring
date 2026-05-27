@@ -319,7 +319,7 @@ def _prediction_summary_section(
     small_swing: list[tuple[BuySignal, float, str]],
 ) -> str:
     total = len(large_short) + len(large_swing) + len(small_short) + len(small_swing)
-    lines = [f"🎯 <b>S등급 종목 — 기술·거래량 신호 ({total}종목)</b>"]
+    lines = [f"🎯 <b>매수 추천 — 규칙+ML 신호 ({total}종목)</b>"]
 
     def _section(group: list[tuple[BuySignal, float, str]], header: str) -> None:
         if not group:
@@ -328,7 +328,8 @@ def _prediction_summary_section(
         for s, _, _ in group:
             badge = _market_badge(s)
             prefix = f"{badge} " if badge else ""
-            lines.append(f"{prefix}[{s.grade}급] <b>{s.name}</b> ({s.ticker})")
+            grade_str = s.grade if s.grade == "ML" else f"{s.grade}급"
+            lines.append(f"{prefix}[{grade_str}] <b>{s.name}</b> ({s.ticker})")
 
     _section(large_short, "🏆 <b>대형주 단기상승</b>")
     _section(large_swing,  "🏆 <b>대형주 스윙상승</b>")
@@ -347,6 +348,7 @@ def _stock_entry(
     pattern_str = f" | 패턴: {s.pattern}" if s.pattern else ""
     pscore_str = f" | 패턴보너스: +{s.pattern_score}" if s.pattern_score > 0 else ""
     star = "⭐ " if s.grade == "S" else ""
+    grade_str = s.grade if s.grade == "ML" else f"{s.grade}급"
     target_line = (
         f"  참고 손절: {s.stop_loss:,.0f}원 | 참고 목표: {s.target_price:,.0f}원\n"
         if s.target_is_resistance
@@ -360,7 +362,7 @@ def _stock_entry(
         auc = _LABEL_AUC.get(group_label, 0.5)
         ml_line = f"  [{label_name}] ML: {prob:.0%} (AUC {auc:.2f}) | EV: {ev_pct:.1f}%/일\n"
     entry = (
-        f"\n<b>{star}[{s.grade}급] {s.name} ({s.ticker})</b>{badge_str}\n"
+        f"\n<b>{star}[{grade_str}] {s.name} ({s.ticker})</b>{badge_str}\n"
         + ml_line +
         f"  추세: {s.trend_score}점 | 거래량: {s.volume_score}점{pattern_str}{pscore_str}\n"
         f"  현재가: {s.current_price:,.0f}원\n"

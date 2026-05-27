@@ -7,7 +7,7 @@ import pandas as pd
 from pykrx import stock
 
 import config
-from agents.buy_signal import BuySignalAgent
+from agents.buy_signal import BuySignalAgent, _calc_stop_loss, _calc_target
 from agents.ml_scorer import score_all_labels, score_universe_all
 from agents.market_filter import MarketFilterAgent
 from agents.pattern_learning import StockPatternLearner
@@ -19,7 +19,7 @@ from agents.volume_analysis import VolumeAnalysisAgent
 from core.scoring_engine import ScoringEngine
 from data.db import get_conn
 from data.store import HourlyStore, MacroStore, MarketIndexStore, OhlcvStore
-from models.signals import BuySignal, MarketContext, PatternLearningResult
+from models.signals import BuySignal, MarketContext, PatternLearningResult, TechnicalResult
 
 logger = logging.getLogger(__name__)
 
@@ -239,17 +239,20 @@ class Orchestrator:
         universe_scores: list[tuple[str, int, int]] = []  # (ticker, trend_score, vol_score_live)
         buy_signals: list[BuySignal] = []
         pattern_results: list[PatternLearningResult] = []
+        tech_map: dict[str, TechnicalResult] = {}
         errs = []
         for r in results:
             if isinstance(r, Exception):
                 errs.append(r)
             elif isinstance(r, tuple):
-                tk, nm, bs, pr, ts, vs = r
+                tk, nm, bs, pr, ts, vs, tech_obj = r
                 all_analyzed.append((tk, nm))
                 universe_scores.append((tk, ts, vs))
                 if bs is not None:
                     buy_signals.append(bs)
                 pattern_results.append(pr)
+                if tech_obj is not None:
+                    tech_map[tk] = tech_obj
         if errs:
             logger.warning("종목 분석 중 예외 %d건 발생 (개별 종목 건너뜀)", len(errs))
         logger.info("매수 신호: %d종목 (전체 %d종목 분석)", len(buy_signals), len(universe))
@@ -282,15 +285,63 @@ class Orchestrator:
             except Exception:
                 logger.exception("_auto_label_unlabeled 실패 — 파이프라인 계속")
 
-        # ── 4c. universe_daily 업데이트 (전종목 trend/vol + ML 예측 + 라벨) ──
+        # ── 4c. universe_daily 업데이트 + ML-only 신호 생성 (텔레그램 전) ──────
         conn_r = get_conn(read_only=True)
         try:
             row = conn_r.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()
             trade_date = str(row[0]) if row[0] else date.today().isoformat()
         finally:
             conn_r.close()
+
+        universe_ml_probs: dict[str, dict[str, float]] = {}
+        try:
+            universe_ml_probs = score_universe_all(trade_date)
+        except Exception:
+            logger.exception("universe ML 추론 실패 — ML-only 신호 생성 건너뜀")
+
+        # 규칙 신호에 없는 종목 중 best_prob >= 0.60 && RR >= 2.0 인 종목만 ML-only 신호
+        _ML_PROB_THRESHOLD = 0.60
+        rule_tickers = {s.ticker for s in buy_signals}
+        ml_only_signals: list[BuySignal] = []
+        for _tk, _lp in universe_ml_probs.items():
+            if _tk in rule_tickers or not _lp:
+                continue
+            _best_label = max(_lp, key=_lp.get)
+            _best_prob = _lp[_best_label]
+            if _best_prob < _ML_PROB_THRESHOLD:
+                continue
+            _tech = tech_map.get(_tk)
+            if _tech is None or _tech.current_price <= 0:
+                continue
+            _price = _tech.current_price
+            _stop = _calc_stop_loss(_price, _tech)
+            _target, _target_is_res = _calc_target(_price, _tech)
+            _rr = round((_target - _price) / max(_price - _stop, 1), 2)
+            if _rr < 2.0:
+                continue
+            ml_only_signals.append(BuySignal(
+                ticker=_tk,
+                name=_get_name(_tk),
+                grade="ML",
+                total_score=0,
+                trend_score=0,
+                volume_score=0,
+                pattern=None,
+                current_price=_price,
+                stop_loss=_stop,
+                target_price=_target,
+                risk_reward=_rr,
+                ensemble_prob=_best_prob,
+                best_label=_best_label,
+                target_is_resistance=_target_is_res,
+                market=ticker_market.get(_tk, ""),
+                mktcap_rank=mktcap_rank.get(_tk),
+                label_probs=_lp,
+            ))
+        logger.info("ML-only 신호: %d종목 (threshold=%.2f, RR≥2.0)", len(ml_only_signals), _ML_PROB_THRESHOLD)
+
         _update_universe_vol_trend(trade_date, universe_scores)
-        _update_universe_preds(trade_date)
+        _update_universe_preds(trade_date, universe_ml_probs)
         try:
             _auto_label_universe_unlabeled()
         except Exception:
@@ -298,9 +349,13 @@ class Orchestrator:
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
-        s_grade_signals = [s for s in buy_signals if s.grade == "S" and s.risk_reward >= 2.0]
-        logger.info("텔레그램 발송: S등급(RR≥2.0) %d종목 → top10 cap (전체 매수신호 %d종목)", len(s_grade_signals), len(buy_signals))
-        await self.report_agent.send(markets, s_grade_signals, sell_signals, pattern_results, all_analyzed)
+        rule_signals = [s for s in buy_signals if s.risk_reward >= 2.0]
+        telegram_signals = rule_signals + ml_only_signals
+        logger.info(
+            "텔레그램 발송: 규칙(RR≥2.0) %d종목 + ML-only %d종목 (전체 규칙 매수신호 %d종목)",
+            len(rule_signals), len(ml_only_signals), len(buy_signals),
+        )
+        await self.report_agent.send(markets, telegram_signals, sell_signals, pattern_results, all_analyzed)
 
     async def _analyze_stock(
         self,
@@ -308,7 +363,7 @@ class Orchestrator:
         market_name: str,
         markets: dict[str, MarketContext],
         semaphore: asyncio.Semaphore,
-    ) -> tuple[str, str, BuySignal | None, PatternLearningResult, int, int]:
+    ) -> tuple[str, str, BuySignal | None, PatternLearningResult, int, int, TechnicalResult | None]:
         async with semaphore:
             loop = asyncio.get_running_loop()
             market_ctx = markets.get(market_name, markets.get("KOSPI"))
@@ -318,7 +373,7 @@ class Orchestrator:
             df_daily = await loop.run_in_executor(None, OhlcvStore.load_daily, ticker)
             if df_daily is None:
                 logger.warning("%s 일봉 데이터 없음 — 건너뜀 (run_collect 먼저 실행 필요)", ticker)
-                return ticker, name, None, StockPatternLearner._insufficient(ticker), 0, 0
+                return ticker, name, None, StockPatternLearner._insufficient(ticker), 0, 0, None
 
             # ── 2. 60분봉 DB 읽기 (실패해도 계속) ──
             try:
@@ -340,7 +395,7 @@ class Orchestrator:
                 )
             except asyncio.TimeoutError:
                 logger.warning("%s 분석 타임아웃(20s) — 건너뜀", ticker)
-                return ticker, name, None, StockPatternLearner._insufficient(ticker), 0, 0
+                return ticker, name, None, StockPatternLearner._insufficient(ticker), 0, 0, None
 
             # ── 4. 패턴학습 (60분봉 채널 포함) ──
             pattern_learner = StockPatternLearner()
@@ -353,7 +408,7 @@ class Orchestrator:
                 ticker, name, tech, vol, market_ctx,
                 pattern_result=pattern_result,
             )
-            return ticker, name, buy_signal, pattern_result, tech.total_score, vol.volume_score
+            return ticker, name, buy_signal, pattern_result, tech.total_score, vol.volume_score, tech
 
 
 def _is_trading_day() -> bool:
@@ -669,8 +724,11 @@ def _update_universe_vol_trend(
         conn.close()
 
 
-def _update_universe_preds(date_str: str) -> None:
-    """universe_daily에 ML 예측 확률 일괄 UPDATE."""
+def _update_universe_preds(date_str: str, probs_by_ticker: dict | None = None) -> None:
+    """universe_daily에 ML 예측 확률 일괄 UPDATE.
+
+    probs_by_ticker가 주어지면 재사용, None이면 score_universe_all() 호출.
+    """
     _PRED_LABELS = [
         "3d_3pct_clean", "3d_5pct_clean", "3d_10pct_clean",
         "5d_3pct_clean", "5d_5pct_clean", "5d_10pct_clean",
@@ -679,11 +737,12 @@ def _update_universe_preds(date_str: str) -> None:
         "first_5d_3pct", "first_5d_5pct", "first_5d_10pct",
         "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
     ]
-    try:
-        probs_by_ticker = score_universe_all(date_str)
-    except Exception:
-        logger.exception("universe ML 추론 실패 — pred_* UPDATE 건너뜀")
-        return
+    if probs_by_ticker is None:
+        try:
+            probs_by_ticker = score_universe_all(date_str)
+        except Exception:
+            logger.exception("universe ML 추론 실패 — pred_* UPDATE 건너뜀")
+            return
     if not probs_by_ticker:
         return
 
@@ -696,7 +755,7 @@ def _update_universe_preds(date_str: str) -> None:
 
     df = pd.DataFrame(rows)
     pred_cols = [f"pred_{l}" for l in _PRED_LABELS]
-    set_clause = ", ".join(f"ud.{col} = s.{col}" for col in pred_cols)
+    set_clause = ", ".join(f"{col} = s.{col}" for col in pred_cols)
 
     conn = get_conn()
     try:
@@ -820,7 +879,7 @@ def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
         return
 
     df_labels = pd.DataFrame(labeled_rows)
-    set_clause = ", ".join(f"ud.{col} = s.{col}" for col in _LABEL_COLS)
+    set_clause = ", ".join(f"{col} = s.{col}" for col in _LABEL_COLS)
     conn = get_conn()
     try:
         conn.register("_lbls", df_labels)
