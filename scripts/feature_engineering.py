@@ -284,8 +284,8 @@ def _compute_all_features(conn) -> pd.DataFrame:
             (ma.close - ma.low_80d) / NULLIF(ma.high_80d - ma.low_80d, 0) AS retracement_ratio,
             (ma.high_80d - ma.close) / NULLIF(ma.high_80d, 0)          AS pullback_depth,
             bb_norm.bb_width_pct_252,
-            ma.amount                                                    AS _amount_raw,
-            ma.volume / NULLIF(ma.shares, 0)                            AS _turnover_raw,
+            ma.close * ma.volume                                         AS _amount_raw,
+            ma.volume / NULLIF(ma.avg_vol_20d, 0)                       AS _turnover_raw,
             -- 중간 계산값 (pandas에서 파생 피처 계산에 사용)
             ret.stock_ret_5d,
             ret.stock_ret_20d,
