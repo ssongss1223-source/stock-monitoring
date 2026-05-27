@@ -2,6 +2,36 @@
 
 ---
 
+## 2026-05-27 세션 53 — Option B 규칙+ML 병렬 게이트 구현
+- 작업: 텔레그램 신호를 규칙 통과 종목(46개)에서 전종목 ML 추론(351개) 기반으로 확장
+- 변경사항:
+  - `agents/orchestrator.py` (f14dc57): `_analyze_stock` 반환에 `TechnicalResult` 추가 → `tech_map` 수집; Step 4c에서 `score_universe_all()` 1회만 실행(재사용); `best_prob≥0.60 & RR≥2.0` 조건 ML-only BuySignal 생성; 텔레그램 발송 규칙(RR≥2.0) + ML-only 합산; `_update_universe_preds` 이중 추론 방지; DuckDB qualified column 에러 2곳 수정
+  - `agents/report.py` (f14dc57): 헤더 "규칙+ML 신호", `[ML]` grade 표시
+- 관련 파일: `agents/orchestrator.py`, `agents/report.py`
+- 메모:
+  - ML-only 임계값 `_ML_PROB_THRESHOLD = 0.60` — 하드코딩, 첫 배포 후 종목 수 보고 조정
+  - `tech_map`에 없는 종목(OHLCV 없음·타임아웃)은 ML-only 후보에서 자동 제외
+  - 기존 `score_universe_all` 호출 횟수는 동일(1회) — VM RAM 영향 없음
+- 다음 아이디어: VM 배포 후 ML-only 종목 수 확인 → 임계값 튜닝
+
+---
+
+## 2026-05-27 세션 52 — Section C 피처 4개 추가 + amount/turnover NULL 버그 수정
+- 작업: `universe_features_daily`에 Section C (Layer2) 피처 4개 추가 + 데이터 품질 문제 발견 및 수정
+- 변경사항:
+  - `scripts/feature_engineering.py` (1cbfd82): `_FEAT_LAYER2_COLS`에 4컬럼 추가, `bb_norm` CTE (252일 bb_width 정규화), `ma` CTE에 `shares` 추가, Section C SELECT 추가, cross-sectional rank 계산 (pandas)
+  - `data/db.py` (1cbfd82): `universe_features_daily` DDL + `_MIGRATIONS`에 4컬럼 ADD COLUMN
+  - `scripts/feature_engineering.py` (2c16e33): `_amount_raw` → `close*volume`, `_turnover_raw` → `volume/avg_vol_20d` (프록시 수정)
+- 관련 파일: `scripts/feature_engineering.py`, `data/db.py`
+- 메모:
+  - `ohlcv_daily.amount`, `.shares`, `.market_cap` 모두 최근 ~5일(3,861행)만 non-null — 역사 데이터 없음
+  - 수정 후 non-null: `bb_width_pct_252` 230,453 / `turnover_rank_pct` 229,977 / `amount_rank_pct` 231,233 / `volatility_rank_pct` 231,233
+  - Section C는 `_FEAT_LAYER2_COLS`에만 포함 — 학습 피처(`_FEAT_TRAIN_COLS`)에는 미포함
+  - `turnover_rank_pct` = cross-sectional rank of (volume / avg_vol_20d) — 당일 비정상 거래량 순위
+- 다음 아이디어: Section C 피처 학습 포함 여부 검토 (bb_width_pct_252, volatility_rank_pct 후보)
+
+---
+
 ## 2026-05-27 세션 51 — BinderException 수정 + 로컬 DB 동기화
 - 작업: 매일 배치 텔레그램 미전송 원인 수정, 로컬 개발 환경 VM과 동기화
 - 변경사항:
