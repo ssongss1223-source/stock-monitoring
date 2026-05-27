@@ -57,6 +57,8 @@ _FEAT_LAYER2_COLS = [
     "recovery_from_low_80d",
     "volume_acceleration", "volume_dryup_ratio",
     "retracement_ratio", "pullback_depth",
+    "bb_width_pct_252",
+    "turnover_rank_pct", "amount_rank_pct", "volatility_rank_pct",
 ]
 
 _LABEL_COLS = [
@@ -100,7 +102,7 @@ def _compute_all_features(conn) -> pd.DataFrame:
     return conn.execute("""
         WITH
         ma AS (
-            SELECT ticker, date, open, high, low, close, volume, amount,
+            SELECT ticker, date, open, high, low, close, volume, amount, shares,
                    AVG(close)  OVER w5     AS ma5,
                    AVG(close)  OVER w20    AS ma20,
                    AVG(close)  OVER w60    AS ma60,
@@ -229,6 +231,14 @@ def _compute_all_features(conn) -> pd.DataFrame:
             SELECT ticker, date,
                    SUM(up_flag) OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 4 PRECEDING AND CURRENT ROW) AS up_days_5d
             FROM up_dir
+        ),
+        bb_norm AS (
+            SELECT ticker, date,
+                   (4 * std20 / NULLIF(ma20, 0))
+                       / NULLIF(AVG(4 * std20 / NULLIF(ma20, 0))
+                           OVER (PARTITION BY ticker ORDER BY date ROWS BETWEEN 251 PRECEDING AND CURRENT ROW), 0)
+                       AS bb_width_pct_252
+            FROM ma
         )
         SELECT
             ma.ticker, ma.date,
@@ -273,6 +283,9 @@ def _compute_all_features(conn) -> pd.DataFrame:
             ma.avg_vol_5d / NULLIF(ma.avg_vol_60d, 0)                   AS volume_dryup_ratio,
             (ma.close - ma.low_80d) / NULLIF(ma.high_80d - ma.low_80d, 0) AS retracement_ratio,
             (ma.high_80d - ma.close) / NULLIF(ma.high_80d, 0)          AS pullback_depth,
+            bb_norm.bb_width_pct_252,
+            ma.amount                                                    AS _amount_raw,
+            ma.volume / NULLIF(ma.shares, 0)                            AS _turnover_raw,
             -- 중간 계산값 (pandas에서 파생 피처 계산에 사용)
             ret.stock_ret_5d,
             ret.stock_ret_20d,
@@ -288,6 +301,7 @@ def _compute_all_features(conn) -> pd.DataFrame:
         JOIN short_chg   ON ma.ticker = short_chg.ticker AND ma.date = short_chg.date
         JOIN valuation   ON ma.ticker = valuation.ticker AND ma.date = valuation.date
         JOIN up_days     ON ma.ticker = up_days.ticker   AND ma.date = up_days.date
+        JOIN bb_norm     ON ma.ticker = bb_norm.ticker    AND ma.date = bb_norm.date
     """).df()
 
 
@@ -335,9 +349,15 @@ def _add_derived_and_cross_sectional(df: pd.DataFrame, df_mkt: pd.DataFrame) -> 
     breadth_map = df.groupby("date")["stock_ret_5d"].transform(_breadth)
     df["market_breadth"] = breadth_map
 
+    # Section C cross-sectional rank 피처
+    df["amount_rank_pct"] = df.groupby("date")["_amount_raw"].rank(pct=True)
+    df["turnover_rank_pct"] = df.groupby("date")["_turnover_raw"].rank(pct=True)
+    df["volatility_rank_pct"] = df.groupby("date")["box_tightness_20d"].rank(pct=True)
+
     df = df.drop(columns=["stock_ret_5d", "stock_ret_20d",
                            "kospi_return_5d", "kospi_return_20d",
-                           "foreign_net_5d", "inst_net_5d"], errors="ignore")
+                           "foreign_net_5d", "inst_net_5d",
+                           "_amount_raw", "_turnover_raw"], errors="ignore")
     return df
 
 

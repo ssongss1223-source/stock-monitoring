@@ -1,6 +1,6 @@
 # 국내 주식 신호 알림 시스템 — 시스템 개요
 
-> Last Updated: 2026-05-17
+> Last Updated: 2026-05-23
 
 ---
 
@@ -97,7 +97,7 @@ run_collect()
  └─ ReportAgent.send_collect_report()                   → 수집 결과 텔레그램
 ```
 
-### 4-2. 신호 분석 (21:00 UTC = 06:00 KST, 다음 날 장 시작 전)
+### 4-2. 신호 분석 (20:00 UTC = 05:00 KST, 다음 날 장 시작 전)
 
 ```
 run_daily() → _pipeline()
@@ -116,12 +116,12 @@ run_daily() → _pipeline()
  │   ├─ StockPatternLearner     → 컵핸들/삼각수렴/BB수축/돌파박스
  │   └─ BuySignalAgent          → 종합 등급 (S/A/B/NONE)
  │
- ├─ score_all_labels()          → XGB+LGBM+ET soft voting (9개 라벨)
+ ├─ score_all_labels()          → XGB+LGBM+ET soft voting (17개 라벨)
  │   └─ 종목별 best_label 선택  → BuySignal.best_label / xgb_prob 업데이트
  ├─ signal_history 저장
  ├─ signal_xgb_probs 저장
  │
- └─ ReportAgent.send()          → S등급 + RR≥2.0, EV/day 4그룹×top3 텔레그램 발송
+ └─ ReportAgent.send()          → S등급 + RR≥2.0, ML확률 4그룹×top3 텔레그램 발송
 ```
 
 ### 4-3. 수동/테스트 실행
@@ -159,18 +159,16 @@ KOSPI / KOSDAQ 각각 독립적으로 판단. 10개 플래그 합산, 최대 13�
 ```
 점수 ≥ 10  →  BULL     (매수 등급 기준 완화)
 점수  7~9  →  SIDEWAYS (기준 유지)
-점수 ≤  6  →  BEAR     (기준 강화, S등급 불가)
+점수 ≤  6  →  BEAR     (기준 강화)
 ```
 
 ### 5-3. 국면별 매수 등급 임계값 (`config/scoring/v1_baseline/buy_grade.yaml`)
 
 | 등급 | BULL | SIDEWAYS | BEAR |
 |------|------|----------|------|
-| S | trend≥12, vol≥13, total≥28 | trend≥13, vol≥14, total≥31 | **불가** |
+| S | trend≥12, vol≥13, total≥28 | trend≥13, vol≥14, total≥31 | trend≥14, vol≥15, total≥33 |
 | A | trend≥9, vol≥10, total≥23 | trend≥10, vol≥11, total≥26 | trend≥13, vol≥13, total≥30 |
 | B | trend≥6, vol≥7, total≥17 | trend≥7, vol≥8, total≥20 | trend≥10, vol≥12, total≥27 |
-
-> 텔레그램 발송 기준이 S등급이므로, BEAR 국면에서는 알림이 발송되지 않는다.
 
 ### 5-4. 매크로 데이터 수집 (`data/store.py` — `MacroStore`)
 
@@ -193,7 +191,7 @@ MacroStore.fetch_and_update()
 | **DB** | DuckDB (`/opt/stock-monitor/data/stock.duckdb`) |
 | **모델 파일** | `/opt/stock-monitor/data/models/` (XGB `.json`, LGBM `.txt`, ET `.pkl`) |
 | **알림** | Telegram Bot API |
-| **스케줄러** | APScheduler (수집 07:00 UTC / 분석 21:00 UTC) |
+| **스케줄러** | APScheduler (수집 07:00 UTC / 분석 20:00 UTC) |
 | **유니버스** | KOSPI200 + KOSDAQ150 = 351종목 (`kospi200_daq150` 모드) |
 | **동시성** | 종목 분석 Semaphore=2 (KRX rate-limit 대응) |
 | **개발 환경** | Windows 10, Claude Code |
@@ -214,42 +212,41 @@ S / A / B 등급 (NONE은 탈락)
     │
     ▼ 필터 2: risk_reward >= 2.0 (손익비)
     │
-    ▼ EV/day 계산 (종목 × 라벨 전체 대상)
-       flatten: S등급 종목 × 9개 라벨 → (종목, 라벨) 쌍 전체
-       EV/day = [prob × gain_pct - (1-prob) × loss_pct] / days
-         · prob    : 해당 (종목, 라벨) ML 확률 (label_probs 필드)
-         · gain_pct: 라벨 목표 수익률 (3%/5%/10%)
-         · loss_pct: ATR 기반 동적 손절 비율 = ATR × 2 / 현재가
-         · days    : 라벨 기간 (3/5/10일)
-    │
     ▼ 4그룹 분류 (그룹별 top 3 = 총 12종목)
-       ┌─────────────────────────────────────────────┐
-       │   단기 라벨: 3d_3/5/10pct, 5d_3/5/10pct     │
-       │   스윙 라벨: 10d_3/5/10pct                  │
-       ├─────────────────────────────────────────────┤
-       │  대형주 단기 top3  │  대형주 스윙 top3       │
-       │  중소형주 단기 top3│  중소형주 스윙 top3     │
-       └─────────────────────────────────────────────┘
+       ┌─────────────────────────────────────────────────────────┐
+       │  단기 라벨 (6개): 3d_3/5/10pct, 5d_3/5/10pct           │
+       │  스윙 라벨 (11개): 10d_3/5/10pct + c2 8개              │
+       │    c2: 3d_3/5pct_c2, 5d_3/5/10pct_c2, 10d_3/5/10pct_c2 │
+       ├─────────────────────────────────────────────────────────┤
+       │  대형주 단기 top3  │  대형주 스윙 top3                  │
+       │  중소형주 단기 top3│  중소형주 스윙 top3                │
+       └─────────────────────────────────────────────────────────┘
        대형주: KOSPI 시총 100위 이내 OR KOSDAQ 50위 이내
        중소형주: 나머지
     │
-    ▼ 그룹 내 중복 제거
-       동일 종목이 여러 라벨로 등장하면 EV/day 최대 라벨 하나만 유지
+    ▼ 그룹 내 종목 선택 방식
+       종목 × 라벨 17개 조합 전체에서 종목별 최고 ML확률 라벨 하나만 유지
+       단기 그룹 먼저 top3 확정 → 스윙 그룹에서 단기 선정 종목 제외 (중복 방지)
     │
-    ▼ 정렬: EV/day 내림차순 → tiebreak: ML 확률 내림차순
+    ▼ 정렬: ML확률 내림차순 → tiebreak 순서:
+       1. 라벨 tiebreak: days 오름차순, gain% 내림차순 (짧은 기간·높은 목표 우선)
+       2. 패턴 등급: A > B > C
+       3. 손익비 내림차순
+       4. EV/day 내림차순
+          EV/day = [prob × gain_pct - (1-prob) × loss_pct] / days
+            · loss_pct: ATR × 2 / 현재가
     │
     ▼ 텔레그램 발송 (agents/report.py)
-       요약 섹션: 4그룹 각 top3 목록 (EV/day, ML 확률 없음)
+       요약 섹션: 4그룹 각 top3 목록
        상세 섹션: 각 종목 entry에
          [3일+5%] EV: X.X%/일, ML: XX%
+         [3일+5%×2] EV: X.X%/일, ML: XX%  ← c2 라벨인 경우
        - ★ 접두사: S등급 종목
        - 목표가: 저항선 기반일 때만 표시 (폴백 +10%는 숨김)
 ```
 
-> **라벨 주의사항**: 현재 라벨은 `max_high_Xd >= entry × (1+Y%)` 기준 (장중 최고가).
-> EV 계산의 gain_pct가 실제 체결 가능 수익보다 낙관적일 수 있음.
-> 추후 `max_close_Xd` (기간 내 최고 종가) 기준으로 변경 검토 중.
-> 변경 시 labeler.py + feature_engineering.py + DB + 27개 모델 재학습 필요.
+> **라벨 기준**: `max_close_Xd >= entry × (1+Y%)` — 기간 내 최고 **종가** 기준 (EOD 매도로 달성 가능).
+> c2 라벨은 동일 조건이 **2일 이상** 달성되는 경우 (더 안정적인 목표).
 
 ---
 
@@ -257,14 +254,32 @@ S / A / B 등급 (NONE은 탈락)
 
 | 모델 | 파일 형식 | 라벨 |
 |------|----------|------|
-| XGBoost | `.json` | 9개 전체 |
-| LightGBM | `.txt` | 9개 전체 |
-| ExtraTrees | `.pkl` | 9개 전체 |
+| XGBoost | `.json` | 전체 적용 |
+| LightGBM | `.txt` | 전체 적용 |
+| ExtraTrees | `.pkl` | 전체 적용 |
 
-- **라벨**: 3d/5d/10d × 3%/5%/10% = 9개
-- **앙상블**: 3개 모델 확률 평균 (soft voting)
-- **종목별 best_label**: 9개 라벨 중 가장 높은 확률의 라벨을 해당 종목의 대표 ML 점수로 사용
-- **재학습**: `run_ml_pipeline.ps1` (로컬 Windows에서 실행 → VM 배포)
+### 학습 라벨 구성 (29개, `scripts/train_models.py`)
+
+| 라벨 타입 | 개수 | 정의 |
+|-----------|------|------|
+| **Basic** | 9개 | 3d/5d/10d × 3%/5%/10% — 기간 내 최고 종가 달성 |
+| **C2** | 8개 | 동일 목표를 종가 기준 **2일 이상** 달성 (`3d_10pct` 제외, 달성률 2.9%) |
+| **Clean** | 9개 | 목표 달성 + 목표 터치 전 최대 낙폭이 임계값(-2%/-3%/-5%, hold기간 기준) 이내 |
+| **First-touch** | 3개 | 10일 윈도우 내 목표(+3/5/10%) 또는 스톱(-2%/-3%/-5%) 중 먼저 닿은 결과 |
+
+- **학습 데이터**: `universe_daily` 기반 (383종목 × 571거래일 = 215,993행, 유동성 필터 후 약 176k행)
+  - 이전: `signal_history` 기반 (S/A/B 등급 신호만 ~16k행)
+- **학습 방식**: 5-fold TimeSeriesSplit, XGB + LGBM + ET soft voting + LR stacker
+- **앙상블**: XGB + LGBM + ET 확률 평균 (soft voting)
+
+### 현재 운영 추론 (17개 라벨)
+- **운영**: Basic 9개 + C2 8개 = 17개 라벨 (ml_scorer.py 기준, 변경 없음)
+- **종목별 best_label**: 17개 라벨 중 가장 높은 확률의 라벨을 대표 ML 점수로 사용
+- Clean / First-touch 라벨은 학습 완료 후 추론 파이프라인 연결 예정
+
+### 재학습
+- **스크립트**: `scripts/train_models.py` + `scripts/feature_engineering.py` (VM 직접 실행)
+- **모델 저장**: `/opt/stock-monitor/data/models/` (`chmod 777` 적용)
 
 ---
 

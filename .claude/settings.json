@@ -2,6 +2,7 @@
   "plansDirectory": ".claude/plans",
   "permissions": {
     "allow": [
+      "Read",
       "mcp__stock-db__read_query",
       "mcp__stock-db__describe_table",
       "mcp__stock-db__list_tables",
@@ -23,5 +24,11 @@
         ]
       }
     ]
+  },
+  "model": "sonnet",
+  "env": {
+    "MAX_THINKING_TOKENS": "10000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
   }
 }

@@ -48,7 +48,7 @@ class BuySignal:
     target_price: float     # 참고 목표가
     risk_reward: float      # 손익비
     pattern_score: int = 0  # PatternLearningResult 보너스 점수 (0/1/3)
-    xgb_prob: Optional[float] = None      # 최고 ML 확률
+    ensemble_prob: Optional[float] = None  # XGB+LGBM soft-voting 앙상블 최고 확률
     best_label: Optional[str] = None      # 최고 확률 라벨 (예: "5d_10pct")
     target_is_resistance: bool = False    # True=저항선 기반, False=+10% 폴백
     market: str = ""               # "KOSPI" | "KOSDAQ"

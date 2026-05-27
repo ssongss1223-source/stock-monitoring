@@ -2,6 +2,39 @@
 
 ---
 
+## 2026-05-27 세션 51 — BinderException 수정 + 로컬 DB 동기화
+- 작업: 매일 배치 텔레그램 미전송 원인 수정, 로컬 개발 환경 VM과 동기화
+- 변경사항:
+  - `data/db.py` (b228779): `backtest_labels` first_* 신컬럼 9개 추가 (`_MIGRATIONS`)
+  - `backtest/labeler.py` (b228779): `save_labels()` positional INSERT → 명시적 컬럼리스트
+  - `agents/orchestrator.py` (b228779): `_auto_label_unlabeled` / `_auto_label_universe_unlabeled` try/except 격리
+  - `CLAUDE.md` (adffee1): 로컬/VM 역할분리, MCP SSH 주의사항, 검증절차, 데이터무결성 원칙
+- 관련 파일: `data/db.py`, `backtest/labeler.py`, `agents/orchestrator.py`, `CLAUDE.md`
+- 메모:
+  - 버그 원인: `backtest_labels` 49컬럼인데 INSERT가 55값 공급 → BinderException → orchestrator 전파 → 텔레그램 미전송 2일 연속
+  - 로컬 DB 동기화: `universe_daily` (101cols/221k rows), `universe_features_daily` (46cols/231k rows) VM parquet export → gcloud scp → 로컬 import 완료
+  - VM-only 26컬럼 (구 pred_*, c2 pred_*) 은 dead weight — `_MIGRATIONS` 추가 불필요
+- 다음 아이디어: 2026-05-28 05:00 KST run_daily 텔레그램 수신 확인, 정상 시 docs/system.md 갱신
+
+---
+
+## 2026-05-25 세션 50 — MCP 안정화 + ET 메모리 실측 + 텔레그램 정렬 옵션 B 적용
+- 작업: MCP SSH persistent 연결 push, ET 모델 메모리 실측 후 제외 유지 결정, 텔레그램 표시 AUC가중 정렬로 전환
+- 변경사항:
+  - `mcp/mcp_vm_ssh.py` (93f884f): persistent connection + keepalive(60s) + `_is_alive()`에 `open_session` 테스트 추가 + 재연결 sleep 5s + 리다이렉트(`> / >>`) 차단
+  - `agents/report.py` (eba638c): 신라벨 18개로 `_SHORT_LABELS`/`_SWING_LABELS`/`_LABEL_DISPLAY` 교체, `_LABEL_AUC` 18개 추가 (XGB+LGBM mean AUC), 정렬 키 `-prob → -(prob × auc)`, `_parse_label()`로 `first_`/`_clean` 접사 처리, 상세 표시에 `(AUC 0.xx)` 노출
+- 관련 파일: `mcp/mcp_vm_ssh.py`, `agents/report.py`
+- 메모:
+  - ET 메모리 실측: 모델 1개 로드 = VmRSS 435MB (pkl 411MB), `del+gc.collect()`로 186MB까지 회복됨 → 이론상 sequential 추론 가능. 단, 추론 시 peak 600MB 필요한데 VM available 525MB로 swap 위험 + 18라벨 × 8s = 144초 추가. 비용 대비 효과 약함 (best=et 6라벨에서 ET 손실, soft AUC 차이 0.003~0.010) → **옵션 C (ET 제외) 유지**
+  - 18라벨 AUC 수집: best 분포 xgb 9 / et 6 / lgbm 3, 최강 라벨 `first_3d_10pct` AUC 0.656 (XGB+LGBM mean), 약한 라벨 `first_10d_3pct` 0.543
+  - 정렬 옵션 비교: A(현행 prob) / B(AUC×prob) / C(고AUC 라벨만) → **B 선택**. end-to-end 검증에서 단기 top3 모두 AUC 최강 라벨 `3d_10pct_clean`(0.640) 자연 선택 확인
+  - report.py 버그 발견: 구버전 17 라벨(`_c2` 변형) 그대로 → 신라벨과 미스매치로 텔레그램 4그룹 모두 비어버릴 뻔. 라벨 매핑 갱신으로 해결
+  - MCP 검증: persistent connection 작동 확인 (service_status, ssh_run 모두 정상)
+  - VM 권한 처리: mcp/ 디렉토리 KHSong 소유 → stock으로 chown 후 git reset --hard origin/main, data/ 는 절대 미포함
+- 다음 아이디어: 내일 (월 2026-05-26) 16:00 KST run_collect → 05:00 KST 화 run_daily 실제 텔레그램 결과 검증, 필요 시 옵션 C(고AUC 라벨만) 또는 ET subprocess 격리 검토
+
+---
+
 ## 2026-05-25 세션 49 — 파이프라인 배포 버그 수정 + 학습 시작 + 문서 정비
 - 작업: feature_engineering + train_models 파이프라인 전체 배포 및 실행, memory/CLAUDE.md 정비
 - 변경 사항:

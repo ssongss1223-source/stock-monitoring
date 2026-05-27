@@ -56,12 +56,12 @@ class Orchestrator:
             signal_date = row[0]
 
             df = conn.execute("""
-                SELECT ticker, vol_score, grade, features, entry_price, xgb_prob
+                SELECT ticker, vol_score, grade, features, entry_price, ensemble_prob
                 FROM signal_history WHERE signal_date = ? AND grade = 'S'
             """, [signal_date]).df()
 
             probs_df = conn.execute("""
-                SELECT ticker, label, xgb_prob FROM signal_xgb_probs WHERE signal_date = ?
+                SELECT ticker, label, ensemble_prob FROM signal_xgb_probs WHERE signal_date = ?
             """, [signal_date]).df()
         finally:
             conn.close()
@@ -70,7 +70,7 @@ class Orchestrator:
         all_label_probs: dict[str, dict[str, float]] = {}
         if not probs_df.empty:
             for ticker, group in probs_df.groupby("ticker"):
-                lp = {str(r["label"]): float(r["xgb_prob"]) for _, r in group.iterrows()}
+                lp = {str(r["label"]): float(r["ensemble_prob"]) for _, r in group.iterrows()}
                 all_label_probs[str(ticker)] = lp
 
         buy_signals: list[BuySignal] = []
@@ -85,8 +85,8 @@ class Orchestrator:
             ticker = str(row["ticker"])
             lp = all_label_probs.get(ticker, {})
             best_lbl = max(lp, key=lp.get) if lp else feat.get("best_label")
-            # DB xgb_prob 칼럼을 fallback으로 사용 (signal_xgb_probs가 비어있을 때)
-            db_prob = float(row["xgb_prob"]) if (row["xgb_prob"] is not None and pd.notna(row["xgb_prob"])) else None
+            # DB ensemble_prob 칼럼을 fallback으로 사용 (signal_xgb_probs가 비어있을 때)
+            db_prob = float(row["ensemble_prob"]) if (row["ensemble_prob"] is not None and pd.notna(row["ensemble_prob"])) else None
             best_prob = lp[best_lbl] if (lp and best_lbl) else db_prob
             s = BuySignal(
                 ticker=ticker,
@@ -106,7 +106,7 @@ class Orchestrator:
                 mktcap_rank=feat.get("mktcap_rank"),
                 label_probs=lp,
                 best_label=best_lbl,
-                xgb_prob=best_prob,
+                ensemble_prob=best_prob,
             )
             buy_signals.append(s)
 
@@ -131,10 +131,10 @@ class Orchestrator:
                     if lp:
                         s.label_probs = lp
                         s.best_label = max(lp, key=lp.get)
-                        s.xgb_prob = lp[s.best_label]
+                        s.ensemble_prob = lp[s.best_label]
                 logger.info("재발송 ML 추론 완료: %d종목", len(buy_signals))
             except Exception:
-                logger.warning("재발송 ML 추론 실패 — xgb_prob 없이 계속")
+                logger.warning("재발송 ML 추론 실패 — ensemble_prob 없이 계속")
 
         logger.info("재발송: %d종목 (signal_date=%s)", len(buy_signals), signal_date)
         await self.report_agent.send({}, buy_signals, [], None, None)
@@ -261,22 +261,22 @@ class Orchestrator:
             s.market = ticker_market.get(s.ticker, "")
             s.mktcap_rank = mktcap_rank.get(s.ticker)
 
-        # ── 4b. XGBoost 추론 + signal_history / signal_xgb_probs 저장 ─────────
+        # ── 4b. 앙상블 추론 + signal_history / signal_xgb_probs 저장 ──────────
         if buy_signals:
-            xgb_probs: dict[str, dict[str, float]] = {}
+            ensemble_probs: dict[str, dict[str, float]] = {}
             try:
-                xgb_probs = score_all_labels(buy_signals)
+                ensemble_probs = score_all_labels(buy_signals)
                 for s in buy_signals:
-                    label_probs = xgb_probs.get(s.ticker, {})
+                    label_probs = ensemble_probs.get(s.ticker, {})
                     if label_probs:
                         s.label_probs = label_probs
                         s.best_label = max(label_probs, key=label_probs.get)
-                        s.xgb_prob = label_probs[s.best_label]
+                        s.ensemble_prob = label_probs[s.best_label]
             except Exception:
-                logger.exception("XGBoost 추론 실패 — xgb_prob 없이 계속")
+                logger.exception("앙상블 추론 실패 — ensemble_prob 없이 계속")
             _save_signal_history(buy_signals)
-            if xgb_probs:
-                _save_signal_xgb_probs(xgb_probs)
+            if ensemble_probs:
+                _save_signal_xgb_probs(ensemble_probs)
             try:
                 _auto_label_unlabeled()
             except Exception:
@@ -433,9 +433,9 @@ def _save_signal_history(signals: list[BuySignal]) -> None:
             })
             conn.execute(
                 """INSERT OR REPLACE INTO signal_history
-                   (signal_date, ticker, vol_score, grade, features, entry_price, scoring_version, xgb_prob)
+                   (signal_date, ticker, vol_score, grade, features, entry_price, scoring_version, ensemble_prob)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                [signal_date, s.ticker, s.volume_score, s.grade, features, s.current_price, 'live_v2', s.xgb_prob],
+                [signal_date, s.ticker, s.volume_score, s.grade, features, s.current_price, 'live_v2', s.ensemble_prob],
             )
         logger.info("signal_history 저장: %d건", len(signals))
     except Exception:
@@ -458,7 +458,7 @@ def _save_signal_xgb_probs(probs_by_ticker: dict[str, dict[str, float]]) -> None
             for label, prob in label_probs.items():
                 conn.execute(
                     """INSERT OR REPLACE INTO signal_xgb_probs
-                       (signal_date, ticker, label, xgb_prob)
+                       (signal_date, ticker, label, ensemble_prob)
                        VALUES (?, ?, ?, ?)""",
                     [signal_date, ticker, label, prob],
                 )

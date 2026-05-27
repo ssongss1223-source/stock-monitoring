@@ -1,6 +1,6 @@
-"""멀티모델 추론 — BuySignal 목록에 xgb_prob 인플레이스 업데이트 + 18개 라벨 동시 추론.
+"""멀티모델 추론 — BuySignal 목록에 ensemble_prob 인플레이스 업데이트 + 18개 라벨 동시 추론.
 
-XGB + LGBM + ET soft voting 앙상블 사용. 모델 파일이 없으면 조용히 스킵.
+XGB + LGBM soft voting 앙상블 사용 (ET 제외: VM RAM 부족). 모델 파일이 없으면 조용히 스킵.
 """
 from __future__ import annotations
 
@@ -132,10 +132,10 @@ def score_all_labels(signals: list[BuySignal]) -> dict[str, dict[str, float]]:
 
 
 def score_signals(signals: list[BuySignal]) -> None:
-    """signals의 각 BuySignal.xgb_prob(3d_5pct_clean)를 인플레이스 업데이트."""
+    """signals의 각 BuySignal.ensemble_prob(3d_5pct_clean)를 인플레이스 업데이트."""
     probs = score_all_labels(signals)
     for s in signals:
-        s.xgb_prob = probs.get(s.ticker, {}).get("3d_5pct_clean")
+        s.ensemble_prob = probs.get(s.ticker, {}).get("3d_5pct_clean")
 
 
 def _build_feature_df_universe(tickers: list[str], date_str: str) -> pd.DataFrame:

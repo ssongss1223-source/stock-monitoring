@@ -247,8 +247,8 @@ def _four_groups(
             g_key = g_prefix + ("s" if label in _SHORT_LABELS else "w")
             if s.label_probs:
                 prob = s.label_probs.get(label, 0.0)
-            elif s.best_label == label and s.xgb_prob is not None:
-                prob = s.xgb_prob
+            elif s.best_label == label and s.ensemble_prob is not None:
+                prob = s.ensemble_prob
             else:
                 continue
             if prob <= 0:
@@ -303,7 +303,7 @@ def _sort_signals(
     """AUC가중 ML score → (days 짧고 % 높은 라벨) → 패턴등급 → 손익비, 상위 10종목 cap."""
     def _key(s: BuySignal):
         auc = _LABEL_AUC.get(s.best_label or "", 0.5)
-        score = -((s.xgb_prob or 0.0) * auc)
+        score = -((s.ensemble_prob or 0.0) * auc)
         lb = _label_tiebreak(s.best_label)
         pr = pr_by_ticker.get(s.ticker)
         pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
@@ -352,7 +352,7 @@ def _stock_entry(
         if s.target_is_resistance
         else f"  참고 손절: {s.stop_loss:,.0f}원\n"
     )
-    prob = s.label_probs.get(group_label) if s.label_probs else s.xgb_prob
+    prob = s.label_probs.get(group_label) if s.label_probs else s.ensemble_prob
     ml_line = ""
     if prob is not None:
         label_name = _LABEL_DISPLAY.get(group_label, group_label)

@@ -64,13 +64,13 @@ CREATE TABLE IF NOT EXISTS ticker_master (
 );
 
 CREATE TABLE IF NOT EXISTS signal_history (
-    signal_date DATE,
-    ticker      VARCHAR,
-    vol_score   INT,
-    grade       VARCHAR,
-    features    JSON,
-    entry_price DOUBLE,
-    xgb_prob    DOUBLE,
+    signal_date   DATE,
+    ticker        VARCHAR,
+    vol_score     INT,
+    grade         VARCHAR,
+    features      JSON,
+    entry_price   DOUBLE,
+    ensemble_prob DOUBLE,
     PRIMARY KEY (signal_date, ticker)
 );
 
@@ -134,10 +134,10 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
 );
 
 CREATE TABLE IF NOT EXISTS signal_xgb_probs (
-    signal_date DATE,
-    ticker      VARCHAR,
-    label       VARCHAR,
-    xgb_prob    DOUBLE,
+    signal_date   DATE,
+    ticker        VARCHAR,
+    label         VARCHAR,
+    ensemble_prob DOUBLE,
     PRIMARY KEY (signal_date, ticker, label)
 );
 
@@ -204,7 +204,11 @@ CREATE TABLE IF NOT EXISTS universe_features_daily (
     volume_acceleration    DOUBLE,   -- avg_vol_5d / avg_vol_20d
     volume_dryup_ratio     DOUBLE,   -- avg_vol_5d / avg_vol_60d
     retracement_ratio      DOUBLE,
-    pullback_depth         DOUBLE
+    pullback_depth         DOUBLE,
+    bb_width_pct_252       DOUBLE,   -- bb_width / 252일 평균 (정규화 밴드폭)
+    turnover_rank_pct      DOUBLE,   -- date별 거래회전율 percentile rank
+    amount_rank_pct        DOUBLE,   -- date별 거래대금 percentile rank
+    volatility_rank_pct    DOUBLE    -- date별 변동성(box_tightness) percentile rank
 );
 
 CREATE TABLE IF NOT EXISTS universe_daily (
@@ -350,6 +354,10 @@ CREATE TABLE IF NOT EXISTS universe_features_daily (
     retracement_ratio      DOUBLE,
     pullback_depth         DOUBLE
 );
+ALTER TABLE universe_features_daily ADD COLUMN IF NOT EXISTS bb_width_pct_252    DOUBLE;
+ALTER TABLE universe_features_daily ADD COLUMN IF NOT EXISTS turnover_rank_pct   DOUBLE;
+ALTER TABLE universe_features_daily ADD COLUMN IF NOT EXISTS amount_rank_pct     DOUBLE;
+ALTER TABLE universe_features_daily ADD COLUMN IF NOT EXISTS volatility_rank_pct DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS per             DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS pbr             DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS eps             BIGINT;
@@ -359,7 +367,7 @@ ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS foreign_exh_rate DOUBLE;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_volume    BIGINT;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_ratio     DOUBLE;
 ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS scoring_version VARCHAR;
-ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS xgb_prob DOUBLE;
+ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS ensemble_prob DOUBLE;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_3d_3pct   INT;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_3d_5pct   INT;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_3pct   INT;
@@ -449,6 +457,18 @@ def _migrate_backtest_labels(conn) -> None:
         pass  # 이미 변경됐거나 컬럼 없음
 
 
+def _migrate_xgb_to_ensemble(conn) -> None:
+    """xgb_prob → ensemble_prob 컬럼 rename (기존 DB 1회 적용)."""
+    try:
+        conn.execute("ALTER TABLE signal_history RENAME COLUMN xgb_prob TO ensemble_prob")
+    except Exception:
+        pass
+    try:
+        conn.execute("ALTER TABLE signal_xgb_probs RENAME COLUMN xgb_prob TO ensemble_prob")
+    except Exception:
+        pass
+
+
 def init_db() -> None:
     with get_conn() as conn:
         # old long-format backtest_labels (hold_days 컬럼 존재) → DROP 후 재생성
@@ -460,6 +480,7 @@ def init_db() -> None:
         conn.execute(_DDL)
         conn.execute(_MIGRATIONS)
         _migrate_backtest_labels(conn)
+        _migrate_xgb_to_ensemble(conn)
         # 기존 signal_history 레코드에 scoring_version 소급 설정
         # vol_score <= 6 은 일봉 근사 backfill, 초과는 60분봉 실시간 구버전
         conn.execute("""
