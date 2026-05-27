@@ -168,12 +168,13 @@ def save_labels(labels: pd.DataFrame) -> None:
     """라벨 DataFrame을 backtest_labels 테이블에 upsert."""
     if labels.empty:
         return
+    cols = ', '.join(_LABEL_COLS)
     conn = get_conn()
     try:
         conn.register("_lbl", labels)
         conn.execute(f"""
-            INSERT OR REPLACE INTO backtest_labels
-            SELECT {', '.join(_LABEL_COLS)} FROM _lbl
+            INSERT OR REPLACE INTO backtest_labels ({cols})
+            SELECT {cols} FROM _lbl
         """)
     finally:
         conn.close()

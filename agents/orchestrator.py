@@ -277,7 +277,10 @@ class Orchestrator:
             _save_signal_history(buy_signals)
             if xgb_probs:
                 _save_signal_xgb_probs(xgb_probs)
-            _auto_label_unlabeled()
+            try:
+                _auto_label_unlabeled()
+            except Exception:
+                logger.exception("_auto_label_unlabeled 실패 — 파이프라인 계속")
 
         # ── 4c. universe_daily 업데이트 (전종목 trend/vol + ML 예측 + 라벨) ──
         conn_r = get_conn(read_only=True)
@@ -288,7 +291,10 @@ class Orchestrator:
             conn_r.close()
         _update_universe_vol_trend(trade_date, universe_scores)
         _update_universe_preds(trade_date)
-        _auto_label_universe_unlabeled()
+        try:
+            _auto_label_universe_unlabeled()
+        except Exception:
+            logger.exception("_auto_label_universe_unlabeled 실패 — 파이프라인 계속")
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
