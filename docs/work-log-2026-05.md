@@ -2,6 +2,20 @@
 
 ---
 
+## 2026-05-28 세션 54 — Option B VM 배포 + 수동 run_daily 실행
+- 작업: Option B 코드 VM 배포, 서비스 재시작, 수동 배치 실행 시도
+- 변경사항: push `ce4c41c` → VM git pull → 서비스 재시작
+- 관련 파일: `agents/orchestrator.py`, `agents/report.py`
+- 메모:
+  - 오늘 05:00 KST run_daily가 구 코드로 실행 중이었으나 서비스 재시작으로 06:07에 중단 (텔레그램 미발송)
+  - 수동 run_daily: `asyncio.run(Orchestrator().run_daily())` — screen 세션으로 06:16 KST 시작, 완료 추정 07:30 KST. 텔레그램 발송 여부 미확인 (stdout 전용, 로그 미기록)
+  - 서비스 중단으로 16:00 KST run_collect 미실행 → 22:14 KST 수동 실행 중
+  - `.env` 소싱 필요: `set -a && . .env && set +a` 패턴으로 환경변수 로드
+  - `run_daily`는 async 함수 → 반드시 `asyncio.run()` 필요 (없으면 coroutine never awaited 경고 후 즉시 종료)
+- 다음 아이디어: 05-29 05:00 KST run_daily 텔레그램 확인 → ML-only 종목 수 보고 임계값 조정
+
+---
+
 ## 2026-05-27 세션 53 — Option B 규칙+ML 병렬 게이트 구현
 - 작업: 텔레그램 신호를 규칙 통과 종목(46개)에서 전종목 ML 추론(351개) 기반으로 확장
 - 변경사항:
