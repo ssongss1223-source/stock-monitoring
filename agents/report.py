@@ -260,25 +260,27 @@ def _four_groups(
     def sort_key(item: tuple):
         s, prob, label = item
         auc = _LABEL_AUC.get(label, 0.5)
-        score = prob * auc  # AUC 가중 확률 — 신뢰도 반영
-        lb = _label_tiebreak(label)
-        pr = pr_by_ticker.get(s.ticker)
-        pg = _PATTERN_GRADE_ORDER.get(pr.grade, 4) if pr else 4
-        loss = _loss_pct(s)
-        ev = _ev_per_day(label, prob, loss)
-        return (-score, lb[0], lb[1], pg, -s.risk_reward, -ev)
+        return (-s.volume_score, -prob, -auc, -s.trend_score)
 
+    # 그룹 선점 순서: 단기/대형 → 단기/중소형 → 스윙/대형 → 스윙/중소형
+    used: set[str] = set()
     large_short = sorted(buckets["ls"].values(), key=sort_key)[:3]
-    large_short_tickers = {s.ticker for s, _, _ in large_short}
-    large_swing = sorted(
-        [v for v in buckets["lw"].values() if v[0].ticker not in large_short_tickers],
+    used |= {s.ticker for s, _, _ in large_short}
+
+    small_short = sorted(
+        [v for v in buckets["ss"].values() if v[0].ticker not in used],
         key=sort_key,
     )[:3]
+    used |= {s.ticker for s, _, _ in small_short}
 
-    small_short = sorted(buckets["ss"].values(), key=sort_key)[:3]
-    small_short_tickers = {s.ticker for s, _, _ in small_short}
+    large_swing = sorted(
+        [v for v in buckets["lw"].values() if v[0].ticker not in used],
+        key=sort_key,
+    )[:3]
+    used |= {s.ticker for s, _, _ in large_swing}
+
     small_swing = sorted(
-        [v for v in buckets["sw"].values() if v[0].ticker not in small_short_tickers],
+        [v for v in buckets["sw"].values() if v[0].ticker not in used],
         key=sort_key,
     )[:3]
 
@@ -332,9 +334,9 @@ def _prediction_summary_section(
             lines.append(f"{prefix}[{grade_str}] <b>{s.name}</b> ({s.ticker})")
 
     _section(large_short, "🏆 <b>대형주 단기상승</b>")
-    _section(large_swing,  "🏆 <b>대형주 스윙상승</b>")
     _section(small_short, "📈 <b>중소형주 단기상승</b>")
-    _section(small_swing,  "📈 <b>중소형주 스윙상승</b>")
+    _section(large_swing, "🏆 <b>대형주 스윙상승</b>")
+    _section(small_swing, "📈 <b>중소형주 스윙상승</b>")
     return "\n".join(lines)
 
 
@@ -397,9 +399,9 @@ def _buy_detail_section(
             lines.append(_stock_entry(s, pr_by_ticker.get(s.ticker), lbl))
 
     _section(large_short, "🏆 <b>대형주 단기상승</b>")
-    _section(large_swing,  "🏆 <b>대형주 스윙상승</b>")
     _section(small_short, "📈 <b>중소형주 단기상승</b>")
-    _section(small_swing,  "📈 <b>중소형주 스윙상승</b>")
+    _section(large_swing, "🏆 <b>대형주 스윙상승</b>")
+    _section(small_swing, "📈 <b>중소형주 스윙상승</b>")
     return "\n".join(lines)
 
 
