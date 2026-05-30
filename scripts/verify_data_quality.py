@@ -58,6 +58,12 @@ LABEL_CHECKS = [
     "label_first_5d_5pct",
 ]
 
+# 모델 품질 임계치
+MODEL_AUC_FAIL = 0.52          # OOF AUC 이하 → FAIL (거의 랜덤)
+MODEL_AUC_WARN = 0.55          # 이하 → WARN
+MODEL_TRAIN_STALE_DAYS = 90    # 마지막 훈련이 N일 이상 지났으면 WARN
+MODEL_INFER_TYPES = ("xgb", "lgbm")  # ET는 추론 미사용 — 점검 제외
+
 
 # ────────────────────────────────────────────────────────────────
 # 결과 추적
@@ -197,6 +203,63 @@ def check_label_coverage(conn, result: Result) -> None:
 
 
 # ────────────────────────────────────────────────────────────────
+# Section 4 — 모델 품질 (model_registry 기반)
+# ────────────────────────────────────────────────────────────────
+
+def check_model_quality(conn, result: Result, verbose: bool = False) -> None:
+    """model_registry의 xgb/lgbm OOF AUC 점검 (ET는 추론 미사용으로 제외)."""
+    section = "model"
+
+    n = conn.execute(
+        "SELECT COUNT(*) FROM model_registry WHERE status='production'"
+    ).fetchone()[0]
+    if n == 0:
+        result.add("WARN", section, "production 모델 없음 — train_models.py 실행 필요")
+        return
+
+    last_train = conn.execute(
+        "SELECT MAX(train_date) FROM model_registry"
+    ).fetchone()[0]
+    if last_train:
+        days_ago = (date.today() - last_train).days
+        msg = f"마지막 훈련 {last_train} ({days_ago}일 전)"
+        if days_ago >= MODEL_TRAIN_STALE_DAYS:
+            result.add("WARN", section, msg)
+        else:
+            result.add("OK", section, msg)
+
+    for mtype in MODEL_INFER_TYPES:
+        rows = conn.execute(
+            "SELECT model_id, oof_auc FROM model_registry"
+            " WHERE status='production' AND model_type=? AND oof_auc IS NOT NULL"
+            " ORDER BY oof_auc",
+            [mtype],
+        ).fetchall()
+        if not rows:
+            result.add("WARN", section, f"{mtype.upper()} 모델 없음")
+            continue
+
+        fail_rows = [(mid, auc) for mid, auc in rows if auc < MODEL_AUC_FAIL]
+        warn_rows = [(mid, auc) for mid, auc in rows if MODEL_AUC_FAIL <= auc < MODEL_AUC_WARN]
+        avg_auc = sum(auc for _, auc in rows) / len(rows)
+
+        for mid, auc in fail_rows:
+            result.add("FAIL", section, f"{mid} AUC={auc:.4f} (기준 {MODEL_AUC_FAIL})")
+        if warn_rows and (verbose or fail_rows):
+            for mid, auc in warn_rows:
+                result.add("WARN", section, f"{mid} AUC={auc:.4f}")
+        elif warn_rows:
+            result.add(
+                "WARN", section,
+                f"{mtype.upper()} AUC 미달({MODEL_AUC_WARN}) {len(warn_rows)}개 "
+                f"(최저 {warn_rows[0][1]:.4f})",
+            )
+
+        if not fail_rows and not warn_rows:
+            result.add("OK", section, f"{mtype.upper()} {len(rows)}개 avg_auc={avg_auc:.4f}")
+
+
+# ────────────────────────────────────────────────────────────────
 # main
 # ────────────────────────────────────────────────────────────────
 
@@ -211,6 +274,7 @@ def main() -> int:
         check_ingestion(conn, result)
         check_null_rates(conn, result)
         check_label_coverage(conn, result)
+        check_model_quality(conn, result, verbose=args.verbose)
     finally:
         conn.close()
 

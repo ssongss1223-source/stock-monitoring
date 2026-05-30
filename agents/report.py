@@ -4,6 +4,7 @@ from typing import Optional
 import requests
 
 import config
+from data.db import get_conn
 from models.signals import BuySignal, MarketContext, PatternLearningResult, SellSignal
 
 logger = logging.getLogger(__name__)
@@ -30,8 +31,8 @@ _LABEL_DISPLAY = {
     "first_5d_3pct": "5일+3%(첫도달)", "first_5d_5pct": "5일+5%(첫도달)", "first_5d_10pct": "5일+10%(첫도달)",
     "first_10d_3pct": "10일+3%(첫도달)", "first_10d_5pct": "10일+5%(첫도달)", "first_10d_10pct": "10일+10%(첫도달)",
 }
-# 실제 배치 추론(XGB+LGBM soft voting)과 일치하는 라벨별 mean AUC (학습 시점 측정)
-_LABEL_AUC = {
+# 라벨별 XGB+LGBM 평균 AUC — model_registry에서 로드, 없으면 학습 시점 측정값으로 폴백
+_LABEL_AUC_FALLBACK = {
     "3d_3pct_clean": 0.553, "3d_5pct_clean": 0.579, "3d_10pct_clean": 0.640,
     "5d_3pct_clean": 0.550, "5d_5pct_clean": 0.559, "5d_10pct_clean": 0.619,
     "10d_3pct_clean": 0.545, "10d_5pct_clean": 0.554, "10d_10pct_clean": 0.574,
@@ -39,6 +40,25 @@ _LABEL_AUC = {
     "first_5d_3pct": 0.548, "first_5d_5pct": 0.565, "first_5d_10pct": 0.624,
     "first_10d_3pct": 0.543, "first_10d_5pct": 0.552, "first_10d_10pct": 0.575,
 }
+
+
+def _load_label_auc() -> dict[str, float]:
+    try:
+        conn = get_conn(read_only=True)
+        rows = conn.execute(
+            "SELECT label_key, AVG(oof_auc) FROM model_registry"
+            " WHERE status='production' AND model_type IN ('xgb','lgbm') AND oof_auc IS NOT NULL"
+            " GROUP BY label_key"
+        ).fetchall()
+        conn.close()
+        if rows:
+            return {k: v for k, v in rows}
+    except Exception:
+        pass
+    return _LABEL_AUC_FALLBACK.copy()
+
+
+_LABEL_AUC: dict[str, float] = _load_label_auc()
 _PATTERN_GRADE_ORDER = {"HIGH": 0, "MEDIUM": 1, "LOW": 2, "INSUFFICIENT": 3}
 _GAIN_PCT     = {"3pct": 0.03, "5pct": 0.05, "10pct": 0.10}
 _DAYS_MAP     = {"3d": 3, "5d": 5, "10d": 10}
