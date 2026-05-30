@@ -835,7 +835,8 @@ def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
     try:
         rows = conn.execute("""
             SELECT ticker, date::VARCHAR FROM universe_daily
-            WHERE label_3d_3pct IS NULL AND date <= CAST(? AS DATE)
+            WHERE (label_3d_3pct IS NULL OR label_3d_3pct_clean IS NULL OR label_first_3d_3pct IS NULL)
+              AND date <= CAST(? AS DATE)
             ORDER BY date, ticker
         """, [cutoff]).fetchall()
     finally:
@@ -866,6 +867,12 @@ def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
         "label_3d_3pct_c2", "label_3d_5pct_c2",
         "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
         "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
+        "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
+        "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
+        "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
+        "label_first_3d_3pct", "label_first_3d_5pct", "label_first_3d_10pct",
+        "label_first_5d_3pct", "label_first_5d_5pct", "label_first_5d_10pct",
+        "label_first_10d_3pct", "label_first_10d_5pct", "label_first_10d_10pct",
     ]
     labeled_rows = []
     for ticker, date_str in rows:
