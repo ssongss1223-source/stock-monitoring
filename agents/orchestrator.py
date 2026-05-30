@@ -342,6 +342,28 @@ class Orchestrator:
 
         _update_universe_vol_trend(trade_date, universe_scores)
         _update_universe_preds(trade_date, universe_ml_probs)
+
+        # universe_outcomes: 10거래일 전 예측일에 대한 raw measurement 저장
+        try:
+            from backtest.labeler import compute_outcomes_universe
+            conn_r3 = get_conn(read_only=True)
+            try:
+                row10 = conn_r3.execute(f"""
+                    SELECT MIN(date) FROM (
+                        SELECT DISTINCT date FROM ohlcv_daily
+                        WHERE date <= CAST('{trade_date}' AS DATE)
+                        ORDER BY date DESC LIMIT 11
+                    )
+                """).fetchone()
+            finally:
+                conn_r3.close()
+            outcome_date = str(row10[0]) if row10 and row10[0] else None
+            if outcome_date:
+                n = compute_outcomes_universe(outcome_date)
+                logger.info("universe_outcomes INSERT 완료: %d행 (예측일 %s)", n, outcome_date)
+        except Exception:
+            logger.exception("universe_outcomes INSERT 실패 — 파이프라인 계속")
+
         try:
             _auto_label_universe_unlabeled()
         except Exception:
@@ -772,6 +794,36 @@ def _update_universe_preds(date_str: str, probs_by_ticker: dict | None = None) -
         logger.exception("universe_daily ML 예측 UPDATE 실패")
     finally:
         conn.close()
+
+    # universe_predictions (long format) INSERT
+    pred_rows = []
+    for ticker, lp in probs_by_ticker.items():
+        for lbl in _PRED_LABELS:
+            prob = lp.get(lbl)
+            if prob is not None:
+                pred_rows.append({
+                    "date": date_str,
+                    "ticker": ticker,
+                    "model_type": "ensemble",
+                    "label": lbl,
+                    "prob": prob,
+                })
+    if pred_rows:
+        df_pred = pd.DataFrame(pred_rows)
+        conn2 = get_conn()
+        try:
+            conn2.register("_pred_long", df_pred)
+            conn2.execute("""
+                INSERT OR REPLACE INTO universe_predictions
+                    (date, ticker, model_type, label, prob)
+                SELECT date, ticker, model_type, label, prob
+                FROM _pred_long
+            """)
+            logger.info("universe_predictions INSERT 완료: %d행", len(pred_rows))
+        except Exception:
+            logger.exception("universe_predictions INSERT 실패")
+        finally:
+            conn2.close()
 
 
 def _insert_universe_features_daily() -> None:

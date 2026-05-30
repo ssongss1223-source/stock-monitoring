@@ -283,6 +283,26 @@ CREATE TABLE IF NOT EXISTS evaluation_history (
     brier           DOUBLE,
     PRIMARY KEY (eval_date, label_key, model_type)
 );
+
+CREATE TABLE IF NOT EXISTS universe_predictions (
+    date       DATE    NOT NULL,
+    ticker     VARCHAR NOT NULL,
+    model_type VARCHAR NOT NULL,
+    label      VARCHAR NOT NULL,
+    prob       DOUBLE,
+    PRIMARY KEY (date, ticker, model_type, label)
+);
+
+CREATE TABLE IF NOT EXISTS universe_outcomes (
+    date         DATE    NOT NULL,
+    ticker       VARCHAR NOT NULL,
+    hold_days    INTEGER NOT NULL,
+    entry_price  DOUBLE,
+    max_close    DOUBLE,
+    max_drawdown DOUBLE,
+    return_close DOUBLE,
+    PRIMARY KEY (date, ticker, hold_days)
+);
 """
 
 

@@ -143,6 +143,74 @@ def label_batch(pairs: list[tuple[str, str | date]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=_LABEL_COLS) if rows else pd.DataFrame(columns=_LABEL_COLS)
 
 
+def compute_outcomes_universe(date_str: str) -> int:
+    """전체 유니버스 종목의 raw measurement를 universe_outcomes에 저장.
+
+    date_str: 예측일 T. T+10 거래일 이후 호출해야 완전한 데이터 확보 가능.
+    반환: INSERT된 행 수 (종목 수 × hold_days 수).
+    """
+    conn_r = get_conn(read_only=True)
+    try:
+        tickers = [r[0] for r in conn_r.execute(
+            "SELECT DISTINCT ticker FROM universe_daily WHERE date = CAST(? AS DATE)",
+            [date_str],
+        ).fetchall()]
+        if not tickers:
+            return 0
+        placeholders = ", ".join("?" * len(tickers))
+        df_all = conn_r.execute(
+            f"SELECT ticker, date, open, high, low, close "
+            f"FROM ohlcv_daily WHERE ticker IN ({placeholders}) ORDER BY ticker, date",
+            tickers,
+        ).df()
+    finally:
+        conn_r.close()
+
+    df_all["date"] = pd.to_datetime(df_all["date"])
+
+    rows = []
+    for ticker in tickers:
+        df = df_all[df_all["ticker"] == ticker].set_index("date")
+        df = df.rename(columns={"open": "Open", "high": "High", "low": "Low", "close": "Close"})
+        sd = pd.Timestamp(date_str)
+        future = df[df.index > sd]
+        if len(future) < max(_HOLD_DAYS):
+            continue
+        window = future.iloc[:max(_HOLD_DAYS)]
+        entry_price = float(window["Open"].iloc[0])
+        if entry_price <= 0:
+            continue
+        for d in _HOLD_DAYS:
+            w = window.iloc[:d]
+            rows.append({
+                "date": sd.date(),
+                "ticker": ticker,
+                "hold_days": d,
+                "entry_price": entry_price,
+                "max_close": float(w["Close"].max()),
+                "max_drawdown": (float(w["Low"].min()) - entry_price) / entry_price,
+                "return_close": (float(w["Close"].iloc[-1]) - entry_price) / entry_price,
+            })
+
+    if not rows:
+        return 0
+
+    df_out = pd.DataFrame(rows)
+    conn = get_conn()
+    try:
+        conn.register("_outcomes", df_out)
+        conn.execute("""
+            INSERT OR REPLACE INTO universe_outcomes
+                (date, ticker, hold_days, entry_price, max_close, max_drawdown, return_close)
+            SELECT date, ticker, hold_days, entry_price, max_close, max_drawdown, return_close
+            FROM _outcomes
+        """)
+    finally:
+        conn.close()
+
+    return len(rows)
+
+
 def save_labels(labels: pd.DataFrame) -> None:
     """라벨 DataFrame을 backtest_labels 테이블에 upsert."""
     if labels.empty:
