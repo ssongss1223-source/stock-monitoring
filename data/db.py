@@ -1,4 +1,6 @@
+import json
 import duckdb
+from datetime import date
 from pathlib import Path
 
 DB_PATH = Path("data/stock.duckdb")
@@ -251,6 +253,36 @@ CREATE TABLE IF NOT EXISTS universe_daily (
     label_10d_5pct_clean  BOOLEAN,
     label_10d_10pct_clean BOOLEAN
 );
+
+CREATE TABLE IF NOT EXISTS feature_catalog (
+    feature_name    VARCHAR PRIMARY KEY,
+    section         VARCHAR,
+    used_in_train   BOOLEAN,
+    added_date      DATE
+);
+
+CREATE TABLE IF NOT EXISTS model_registry (
+    model_id        VARCHAR PRIMARY KEY,
+    label_key       VARCHAR,
+    model_type      VARCHAR,
+    file_path       VARCHAR,
+    train_date      DATE,
+    status          VARCHAR DEFAULT 'production',
+    oof_auc         DOUBLE,
+    prec_at_20      DOUBLE,
+    ret_at_20       DOUBLE
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_history (
+    eval_date       DATE,
+    label_key       VARCHAR,
+    model_type      VARCHAR,
+    oof_auc         DOUBLE,
+    prec_at_10      DOUBLE,
+    prec_at_20      DOUBLE,
+    brier           DOUBLE,
+    PRIMARY KEY (eval_date, label_key, model_type)
+);
 """
 
 
@@ -441,6 +473,117 @@ def _migrate_xgb_to_ensemble(conn) -> None:
         pass
 
 
+# (feature_name, section, used_in_train) — feature_engineering.py 기준
+_FEATURE_CATALOG_ROWS = [
+    # Section A
+    ("ma_cross_5_20",          "A", True),
+    ("obv_slope_5d",           "A", True),
+    ("high_low_ratio",         "A", True),
+    ("body_ratio",             "A", True),
+    ("short_balance_ratio",    "A", True),
+    ("short_volume_ratio_5d",  "A", True),
+    ("short_balance_change_5d","A", True),
+    ("volume_surge_ratio",     "A", True),
+    ("amount_surge_ratio",     "A", True),
+    ("price_momentum_3d",      "A", True),
+    ("price_momentum_10d",     "A", True),
+    ("inst_net_20d",           "A", True),
+    ("foreign_exh_change_5d",  "A", True),
+    ("roe_proxy",              "A", True),
+    ("relative_strength_5d",   "A", True),
+    ("combined_net_5d",        "A", True),
+    ("kospi_above_ma60",       "A", True),
+    ("market_volatility_20d",  "A", True),
+    ("grade_S",                "A", True),
+    ("grade_A",                "A", True),
+    ("grade_B",                "A", True),
+    # Section B
+    ("bb_width",               "B", True),
+    ("atr_14",                 "B", True),
+    ("atr_ratio_60d",          "B", True),
+    ("volume_zscore_20d",      "B", True),
+    ("amount_zscore_20d",      "B", True),
+    ("rs_20d",                 "B", True),
+    ("rs_rank_pct",            "B", True),
+    ("market_breadth",         "B", True),
+    ("breakout_distance_20d",  "B", True),
+    ("box_tightness_20d",      "B", True),
+    # Section C (layer2, DB 저장만 — 학습 미사용)
+    ("breakout_distance_60d",  "C", False),
+    ("breakout_distance_120d", "C", False),
+    ("range_80d_pct",          "C", False),
+    ("distance_from_ma224",    "C", False),
+    ("up_days_5d",             "C", False),
+    ("gap_percent",            "C", False),
+    ("opening_strength",       "C", False),
+    ("intraday_close_strength","C", False),
+    ("recovery_from_low_80d",  "C", False),
+    ("volume_acceleration",    "C", False),
+    ("volume_dryup_ratio",     "C", False),
+    ("retracement_ratio",      "C", False),
+    ("pullback_depth",         "C", False),
+    ("bb_width_pct_252",       "C", False),
+    ("turnover_rank_pct",      "C", False),
+    ("amount_rank_pct",        "C", False),
+    ("volatility_rank_pct",    "C", False),
+]
+
+
+def _seed_feature_catalog(conn) -> None:
+    n = conn.execute("SELECT COUNT(*) FROM feature_catalog").fetchone()[0]
+    if n > 0:
+        return
+    today = date.today().isoformat()
+    conn.executemany(
+        "INSERT OR IGNORE INTO feature_catalog (feature_name, section, used_in_train, added_date)"
+        " VALUES (?, ?, ?, ?)",
+        [(name, sec, used, today) for name, sec, used in _FEATURE_CATALOG_ROWS],
+    )
+
+
+def register_models_from_json(
+    results_path: str = "data/model_results.json",
+    train_date: str | None = None,
+) -> None:
+    """model_results.json → model_registry + evaluation_history 일괄 등록."""
+    rp = Path(results_path)
+    if not rp.exists():
+        print(f"파일 없음: {rp}")
+        return
+    with open(rp, encoding="utf-8") as f:
+        summary = json.load(f)
+    if train_date is None:
+        train_date = date.today().isoformat()
+    out_dir = Path("data/models")
+    ext_map = {"xgb": ".json", "lgbm": ".txt", "et": ".pkl"}
+    conn = get_conn()
+    try:
+        for row in summary:
+            label_key = row["target"].replace("label_", "")
+            for mtype, ext in ext_map.items():
+                if f"{mtype}_auc" not in row:
+                    continue
+                model_id = f"{mtype}_{label_key}"
+                fpath = str(out_dir / f"{mtype}_label_{label_key}{ext}")
+                conn.execute(
+                    "INSERT OR REPLACE INTO model_registry"
+                    " (model_id, label_key, model_type, file_path, train_date, status, oof_auc, prec_at_20, ret_at_20)"
+                    " VALUES (?, ?, ?, ?, ?, 'production', ?, ?, ?)",
+                    [model_id, label_key, mtype, fpath, train_date,
+                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@20"), row.get(f"{mtype}_ret@20")],
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO evaluation_history"
+                    " (eval_date, label_key, model_type, oof_auc, prec_at_10, prec_at_20, brier)"
+                    " VALUES (?, ?, ?, ?, ?, ?, NULL)",
+                    [train_date, label_key, mtype,
+                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@10"), row.get(f"{mtype}_prec@20")],
+                )
+        print(f"등록 완료: {len(summary)}라벨 × {len(ext_map)}모델")
+    finally:
+        conn.close()
+
+
 def init_db() -> None:
     with get_conn() as conn:
         # old long-format backtest_labels (hold_days 컬럼 존재) → DROP 후 재생성
@@ -453,6 +596,7 @@ def init_db() -> None:
         conn.execute(_MIGRATIONS)
         _migrate_backtest_labels(conn)
         _migrate_xgb_to_ensemble(conn)
+        _seed_feature_catalog(conn)
         # 기존 signal_history 레코드에 scoring_version 소급 설정
         # vol_score <= 6 은 일봉 근사 backfill, 초과는 60분봉 실시간 구버전
         conn.execute("""

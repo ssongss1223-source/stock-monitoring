@@ -19,12 +19,13 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import date as _date
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import roc_auc_score
+from sklearn.metrics import brier_score_loss, roc_auc_score
 from sklearn.model_selection import TimeSeriesSplit
 
 try:
@@ -120,6 +121,11 @@ def _return_at_k(max_return: pd.Series, oof: np.ndarray, k: int) -> float:
 def _auc_from_oof(y_true: pd.Series, oof: np.ndarray) -> float:
     valid = ~np.isnan(oof)
     return float(roc_auc_score(np.asarray(y_true)[valid], oof[valid]))
+
+
+def _brier_from_oof(y_true: pd.Series, oof: np.ndarray) -> float:
+    valid = ~np.isnan(oof)
+    return float(brier_score_loss(np.asarray(y_true)[valid], oof[valid]))
 
 
 # ── CV + OOF 수집 ─────────────────────────────────────────────────────────────
@@ -330,7 +336,7 @@ def main() -> None:
             row["lr_auc"] = _auc_from_oof(y, lr_oof)
             print(f"  LR    OOF AUC:  {row['lr_auc']:.4f}  ← stacking")
 
-        # ── Step 9: Precision@K, Return@K ────────────────────────────────
+        # ── Step 9: Precision@K, Return@K, Brier ─────────────────────────
         print()
         for k in _EVAL_K:
             print(f"  {'모델':<12s} Prec@{k:<3d} Return@{k}")
@@ -344,6 +350,8 @@ def main() -> None:
                 else:
                     print(f"  {name:<12s} {prec:>6.1%}   N/A")
             print()
+        for name, oof in model_oofs.items():
+            row[f"{name}_brier"] = _brier_from_oof(y, oof)
 
         # ── Step 10: 라벨별 최고 모델 선택 (Precision@20 기준) ──────────
         base_models = [n for n in model_oofs if n not in ("soft", "rank")]
@@ -425,6 +433,44 @@ def main() -> None:
     with open(result_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     print(f"상세 결과 저장: {result_path}")
+
+    _write_to_db(summary, _date.today().isoformat())
+
+
+def _write_to_db(summary: list[dict], train_date: str) -> None:
+    """훈련 결과 → model_registry + evaluation_history."""
+    from data.db import get_conn
+    out_dir = Path("data/models")
+    ext_map = {"xgb": ".json", "lgbm": ".txt", "et": ".pkl"}
+    conn = get_conn()
+    try:
+        for row in summary:
+            label_key = row["target"].replace("label_", "")
+            for mtype, ext in ext_map.items():
+                if f"{mtype}_auc" not in row:
+                    continue
+                model_id = f"{mtype}_{label_key}"
+                fpath = str(out_dir / f"{mtype}_label_{label_key}{ext}")
+                conn.execute(
+                    "INSERT OR REPLACE INTO model_registry"
+                    " (model_id, label_key, model_type, file_path, train_date, status, oof_auc, prec_at_20, ret_at_20)"
+                    " VALUES (?, ?, ?, ?, ?, 'production', ?, ?, ?)",
+                    [model_id, label_key, mtype, fpath, train_date,
+                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@20"), row.get(f"{mtype}_ret@20")],
+                )
+                conn.execute(
+                    "INSERT OR REPLACE INTO evaluation_history"
+                    " (eval_date, label_key, model_type, oof_auc, prec_at_10, prec_at_20, brier)"
+                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    [train_date, label_key, mtype,
+                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@10"),
+                     row.get(f"{mtype}_prec@20"), row.get(f"{mtype}_brier")],
+                )
+        print(f"DB 등록: model_registry + evaluation_history ({len(summary)}라벨)")
+    except Exception as e:
+        print(f"DB 등록 실패 (무시): {e}")
+    finally:
+        conn.close()
 
 
 if __name__ == "__main__":
