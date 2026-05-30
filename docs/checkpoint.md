@@ -1,47 +1,58 @@
 # Checkpoint
 
 ## Current Goal
-- 내일(05-29) 05:00 KST run_daily Option B 첫 정상 실행 + 텔레그램 수신 확인
+- **Phase 1**: `verify_data_quality.py` + `/verify-data` skill 작성 — 데이터 품질 자동 검증 토대
 
 ## Current Status
-- **로컬/VM 코드** — `ce4c41c` (Option B 배포 완료)
-- **서비스** — active (22:13 KST 재시작)
-- **DB** — 05-27까지만 수집. 05-28 run_collect 미실행(서비스 중단 기간) → 22:14 KST 수동 실행 중
-- **05-28 수동 run_daily** — 06:16~07:30 KST screen 세션으로 실행됨. 로그 미기록(stdout만 출력). 텔레그램 발송 여부 미확인
+- **코드** `e6bfb72` — 로컬/VM 동일
+- **서비스** active (PID 411, 17:36 KST 재시작, e2-medium 위)
+- **스케줄러** APScheduler 잡 등록 정상
+- **VM** `e2-medium` (4GB RAM / 50GB 디스크) — 증설 완료 (2026-05-30)
+- **데이터** 05-29까지 모두 적재 완료 (이 주 거래일 완료)
+- **다음 자동 배치** 월요일 05:00 KST run_daily
 
 ## Done
-- **Option B 배포** (ce4c41c) — VM 배포·서비스 재시작 완료 (2026-05-28)
-- **Option B 구현** (f14dc57) — 규칙+ML 병렬 게이트, `[ML]` grade, DuckDB 에러 2곳 수정
-- **Section C 피처 추가** (1cbfd82) — `bb_width_pct_252`, `turnover_rank_pct`, `amount_rank_pct`, `volatility_rank_pct`
-- **amount/turnover NULL 버그 수정** (2c16e33) — `close*volume` / `volume/avg_vol_20d` 프록시
-- **BinderException + 신라벨 18 + AUC 정렬** (b228779, eba638c)
+- VM 증설 e2-micro → e2-medium + 디스크 50GB (2026-05-30)
+- 텔레그램 정렬 변경 (`e6bfb72`) — 거래량점수→ML확률→AUC→추세점수, 그룹·중복 정리
+- 아키텍처 로드맵 합의 (`docs/architecture-roadmap.md` D1-D8)
+- Option B 배포 + 18라벨 ML 추론 안정화
 
-## Remaining
-- **[확인]** 05-28 수동 run_daily 텔레그램 수신 여부 확인
-- **[확인]** 05-28 run_collect 수동 실행 완료 후 DB 데이터 확인
-- **[필수]** 05-29 05:00 KST run_daily 텔레그램 확인 (서비스 자동 실행)
-  - 로그: `journalctl -u stock-monitor --since "today" --no-pager | grep -E "ML-only|텔레그램|ERROR"`
-- **[검토]** Section C 피처를 `_FEAT_TRAIN_COLS`에 포함해 재학습할지 결정
-- **[조건부]** 텔레그램 정상 수신 후 docs/system.md 갱신
+## Remaining (Phase 1 단위)
+- **[P1-1]** `scripts/verify_data_quality.py` 작성 (6단계 검증)
+- **[P1-2]** `/verify-data` skill 작성 (`.claude/commands/verify-data.md`)
+- **[P1-3]** VM 첫 실행 → 임계치 튜닝
+- **[P1-4]** (선택) cron 16:35 KST 등록 (run_collect 직후 자동 검증)
+- **[검토]** `backtest_labels`에 `label_first_up_*` 3개 vs `_LABEL_COLS` 55개 — 코드는 명시 컬럼 INSERT이므로 안전, 정리 시 deprecated 처리 고려
 
 ## Risks / Blockers
-- 05-28 run_collect 수동 실행 완료 여부 미확인 — 완료 후 DB 날짜 체크 필요
-- 수동 run_daily 로그 미기록 (screen stdout) — 성공/실패 판단 불가. 텔레그램으로만 확인
-- `_LABEL_AUC` 하드코딩 → 재학습 시 수동 갱신 필요
-- ML-only 임계값 0.60 — 첫 배포 후 실제 종목 수 모니터링 필요
+- 7월 말 (8/4 만료 전) **Cloud Billing 유료 업그레이드** 필수 — 안 하면 VM 자동 stop
+- `_LABEL_AUC` 하드코딩 → 재학습 시 수동 갱신 (P2에서 model_registry로 자동화)
+- 로컬 `mcp__stock-db` 사용 금지 — 서비스 write 락 충돌. DB 조회는 VM `sudo -u stock ./.venv/bin/python`
 
 ## Next Actions
-1. run_collect 완료 확인: `sudo -u stock python3 -c "from data.db import get_conn; c=get_conn(read_only=True); print(c.execute('SELECT MAX(date), COUNT(*) FROM universe_daily WHERE date=(SELECT MAX(date) FROM universe_daily)').fetchone())"`
-2. 05-29 05:00 KST 이후 텔레그램 확인 + 로그 확인
-3. ML-only 신호 종목 수 확인 → 임계값 조정 여부 결정 (0.60 → 0.65 or 0.55)
+1. `scripts/verify_data_quality.py` 작성 — 적재 완전성·NULL·라벨 채움 3개 섹션부터
+2. `.claude/commands/verify-data.md` skill 작성
+3. VM 첫 실행: `cd /opt/stock-monitor && sudo -u stock ./.venv/bin/python scripts/verify_data_quality.py`
+4. 결과 보고 임계치 조정 → P2(메타 테이블) 진입 판단
 
 ## References
-- **VM**: `instance-20260505-092414` (us-central1-a), `/opt/stock-monitor`
+- **VM**: e2-medium, us-central1-a, `/opt/stock-monitor`
 - **서비스**: `stock-monitor.service` (stock user, APScheduler)
-- **스케줄**: `run_collect` 07:00 UTC (16:00 KST) / `run_daily` 20:00 UTC (05:00 KST 다음날)
-- **모델**: `/opt/stock-monitor/data/models/` — XGB(.json) / LGBM(.txt)
-- **핵심 파일**: `agents/orchestrator.py` (`_ML_PROB_THRESHOLD=0.60`), `agents/report.py` (`_LABEL_AUC`), `agents/ml_scorer.py`
-- **로그**: `journalctl -u stock-monitor --since "today" --no-pager | tail -30`
+- **스케줄**: run_collect 07:00 UTC (16:00 KST) / run_daily 20:00 UTC (05:00 KST 다음날)
+- **로드맵**: `docs/architecture-roadmap.md` — Phase 1-7 + D1-D8 결정 근거
+- **핵심 파일**:
+  - `agents/orchestrator.py` (`_ML_PROB_THRESHOLD=0.60`)
+  - `agents/report.py` (`_LABEL_AUC`, 정렬 키)
+  - `agents/ml_scorer.py` (`_FEAT_COLS` 31)
+  - `scripts/feature_engineering.py` (`_FEAT_TRAIN_COLS` 31 / `_FEAT_LAYER2_COLS` 16)
+  - `backtest/labeler.py` (`_LABEL_COLS` 55)
+- **데이터 파이프라인** (유니버스 ~351종목):
+  - 16:00 KST → ohlcv_daily → universe_daily(1차 피처) + universe_features_daily(47 파생 피처)
+  - 05:00 KST → ML 추론 → universe_daily.pred_* / signal_history / signal_xgb_probs / 텔레그램
+  - T+15 → 자동 라벨링 → universe_daily.label_* + backtest_labels
+- **검증 2갈래**:
+  - A. 유니버스 OOS: `universe_features_daily ⨝ universe_daily.label_*_clean`
+  - B. 라이브 신호 정확도: `signal_history ⨝ backtest_labels`
 
 ## Last Updated
-- 2026-05-28 22:15 KST
+- 2026-05-30 18:00 KST

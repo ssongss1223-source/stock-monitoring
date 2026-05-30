@@ -2,6 +2,57 @@
 
 ---
 
+## 2026-05-30 세션 56 — 텔레그램 정렬 변경 + VM 증설 + 아키텍처 로드맵 합의
+- 작업:
+  1. 텔레그램 정렬 로직 변경 (`e6bfb72`)
+  2. VM e2-micro → e2-medium + 디스크 30→50GB 증설
+  3. 데이터 마트 리팩터링·검증 지표·모델 다양화·자동화 비전 합의
+  4. `docs/architecture-roadmap.md` 신규 작성 (D1-D8)
+- 변경 사항:
+  - `agents/report.py`: `sort_key = (-volume_score, -prob, -auc, -trend_score)` / 그룹 표시 순서 단기/대형→단기/중소형→스윙/대형→스윙/중소형 / 중복 제거 누적 set
+  - VM: e2-medium (4GB RAM), 디스크 50GB, OS 그대로
+  - `docs/architecture-roadmap.md`: 신규
+- 관련 파일: `agents/report.py`, `docs/architecture-roadmap.md`
+- 결정사항 (자세한 근거는 architecture-roadmap.md 참조):
+  - **D1**: 데이터 마트 4계층(L0-L3) + 4메타 객체 (feature_catalog, model_registry, evaluation_history, experiment_runs)
+  - **D2**: 검증 지표 AUC 외 TopK precision/return, Brier, Lift @ K, Coverage 추가
+  - **D3**: 모델 후보 — CatBoost(★) → LR(★) → Stacking(★★) → TabPFN(★★) → TabNet(★★★)
+  - **D4**: 운영-학습 VM 분리는 Phase 5부터 (Spot e2-standard-4)
+  - **D5**: Promotion Gate 자동 승격 (TopK +2% & Brier ±5% & 7일 OOS 통과)
+  - **D6**: 텔레그램 정렬 거래량점수→ML확률→AUC→추세점수
+  - **D7**: VM 증설 e2-medium $15/월, 크레딧 차감
+  - **D8**: 7월 말 유료 Cloud Billing 업그레이드 필수 (8/4 만료 대비)
+- VM 증설 Before/After:
+  - RAM 969Mi → 3.8Gi (avail 515Mi → 3.2Gi)
+  - Swap used 1.2Gi → 0 (RAM 압박 해소)
+  - Disk 30G(73%) → 49G(44%)
+  - 비용 $0 → $15/월 (크레딧 ₩419,105로 8/4까지 ₩0 청구)
+- 증설 과정 메모:
+  - Cloud Shell + gcloud CLI로 진행 (snapshot → stop → 머신타입 변경 → 디스크 확장 → start)
+  - Debian 12 cloud-init이 부팅 시 파일시스템 자동 확장 — `growpart`/`resize2fs` 불필요
+  - data/ 권한 stock:stock 유지 확인 완료
+- 다음: P1 — `verify_data_quality.py` + `/verify-data` skill 작성
+- 다음 아이디어: Phase 진행 — P1→P2(메타 테이블)→P3(long 마트)→P4(CatBoost)
+
+---
+
+## 2026-05-28 세션 55 — 데이터 파이프라인 구조 파악 + run_collect 수동실행 원인 분석
+- 작업: 컨텍스트 복원, VM/DB/서비스 환경 점검, feature/label 파이프라인 구조 정리
+- 변경 사항: 코드/DB 변경 없음 (조사 전용)
+- 관련 파일: `agents/orchestrator.py`, `scripts/feature_engineering.py`, `backtest/labeler.py`, `agents/ml_scorer.py`
+- 메모:
+  - **mcp__stock-db hang 원인**: PID 315961(stock 유저의 manual_collect screen)이 stock.duckdb write 락 보유. DuckDB 에러의 "user KHSong" 표기는 misleading — 실제 owner는 stock. 로컬 mcp는 사용 금지, VM `sudo -u stock ./.venv/bin/python`만 사용
+  - **05-26/05-27 텔레그램 미발송 원인 확정**: `_auto_label_unlabeled() → save_labels()` BinderException (`backtest_labels has 49 columns but 55 values`). b228779에서 try/except 격리됨 → 05-29부터는 라벨링 실패해도 텔레그램 발송됨
+  - **수동 run_collect 진짜 원인**: 사용자가 06:07 KST에 서비스 stop → 16:00 자동 run_collect 누락 → 22:14 수동 보충
+  - **자동 실행 환경 OK**: 서비스 active, 스케줄러 등록 정상, manual_collect는 16:00 전 종료 예상
+- 데이터 구조 정리 (사용자 질문):
+  - 16:00 KST는 **유니버스 종목(~351)** 만 OHLCV 수집 + universe_features_daily 47피처 계산 (전체 KRX 아님)
+  - 검증 경로 2갈래: ① universe_features_daily ⨝ universe_daily.label_*_clean (OOS 전체) / ② signal_history ⨝ backtest_labels (라이브 신호 정확도)
+  - 학습 사용 31 피처 (_FEAT_TRAIN_COLS) vs DB 저장만 16 피처 (_FEAT_LAYER2_COLS, Section C — 미학습)
+- 다음 아이디어: 05-29 05:00 결과 보고 → Section C 16개 재학습 포함 여부 결정
+
+---
+
 ## 2026-05-28 세션 54 — Option B VM 배포 + 수동 run_daily 실행
 - 작업: Option B 코드 VM 배포, 서비스 재시작, 수동 배치 실행 시도
 - 변경사항: push `ce4c41c` → VM git pull → 서비스 재시작
