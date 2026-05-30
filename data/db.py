@@ -87,31 +87,6 @@ CREATE TABLE IF NOT EXISTS backtest_labels (
     return_3d        DOUBLE,
     return_5d        DOUBLE,
     return_10d       DOUBLE,
-    c2_3d_3pct       INT,
-    c2_3d_5pct       INT,
-    c2_5d_3pct       INT,
-    c2_5d_5pct       INT,
-    c2_5d_10pct      INT,
-    c2_10d_3pct      INT,
-    c2_10d_5pct      INT,
-    c2_10d_10pct     INT,
-    label_3d_3pct    BOOLEAN,
-    label_3d_5pct    BOOLEAN,
-    label_3d_10pct   BOOLEAN,
-    label_5d_3pct    BOOLEAN,
-    label_5d_5pct    BOOLEAN,
-    label_5d_10pct   BOOLEAN,
-    label_10d_3pct   BOOLEAN,
-    label_10d_5pct   BOOLEAN,
-    label_10d_10pct  BOOLEAN,
-    label_3d_3pct_c2  BOOLEAN,
-    label_3d_5pct_c2  BOOLEAN,
-    label_5d_3pct_c2  BOOLEAN,
-    label_5d_5pct_c2  BOOLEAN,
-    label_5d_10pct_c2 BOOLEAN,
-    label_10d_3pct_c2 BOOLEAN,
-    label_10d_5pct_c2 BOOLEAN,
-    label_10d_10pct_c2 BOOLEAN,
     label_3d_3pct_clean   BOOLEAN,
     label_3d_5pct_clean   BOOLEAN,
     label_3d_10pct_clean  BOOLEAN,
@@ -266,23 +241,6 @@ CREATE TABLE IF NOT EXISTS universe_daily (
     pred_first_10d_10pct  DOUBLE,
 
     entry_price        DOUBLE,
-    label_3d_3pct      BOOLEAN,
-    label_3d_5pct      BOOLEAN,
-    label_3d_10pct     BOOLEAN,
-    label_5d_3pct      BOOLEAN,
-    label_5d_5pct      BOOLEAN,
-    label_5d_10pct     BOOLEAN,
-    label_10d_3pct     BOOLEAN,
-    label_10d_5pct     BOOLEAN,
-    label_10d_10pct    BOOLEAN,
-    label_3d_3pct_c2   BOOLEAN,
-    label_3d_5pct_c2   BOOLEAN,
-    label_5d_3pct_c2   BOOLEAN,
-    label_5d_5pct_c2   BOOLEAN,
-    label_5d_10pct_c2  BOOLEAN,
-    label_10d_3pct_c2  BOOLEAN,
-    label_10d_5pct_c2  BOOLEAN,
-    label_10d_10pct_c2 BOOLEAN,
     label_3d_3pct_clean   BOOLEAN,
     label_3d_5pct_clean   BOOLEAN,
     label_3d_10pct_clean  BOOLEAN,
@@ -368,31 +326,6 @@ ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_volume    BIGINT;
 ALTER TABLE ohlcv_daily ADD COLUMN IF NOT EXISTS short_ratio     DOUBLE;
 ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS scoring_version VARCHAR;
 ALTER TABLE signal_history ADD COLUMN IF NOT EXISTS ensemble_prob DOUBLE;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_3d_3pct   INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_3d_5pct   INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_3pct   INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_5pct   INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_5d_10pct  INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_3pct  INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_5pct  INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS c2_10d_10pct INT;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_3pct     BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_5pct     BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_10pct    BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_3pct     BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_5pct     BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct    BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct    BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct    BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct   BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_3pct_c2  BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_5pct_c2  BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_3pct_c2  BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_5pct_c2  BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct_c2 BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct_c2 BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct_c2 BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct_c2 BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_3pct_clean   BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_5pct_clean   BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_3d_10pct_clean  BOOLEAN;
@@ -444,6 +377,48 @@ ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_5d_10pct   DOUBLE
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_10d_3pct   DOUBLE;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_10d_5pct   DOUBLE;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_first_10d_10pct  DOUBLE;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_3d_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_3d_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_5d_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_5d_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_5d_10pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_10d_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_10d_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS c2_10d_10pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_3d_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_3d_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_3d_10pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_5d_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_5d_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_5d_10pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_10d_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_10d_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_10d_10pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_3d_3pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_3d_5pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_5d_3pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_5d_5pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_5d_10pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_10d_3pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_10d_5pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_10d_10pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_3d_3pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_3d_5pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_3d_10pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_3pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_5pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_10pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_3pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_5pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_10pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_3d_3pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_3d_5pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_3pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_5pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_10pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_3pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_5pct_c2;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_10pct_c2;
 """
 
 

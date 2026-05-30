@@ -1,14 +1,12 @@
 """
 백테스트 라벨러 — (ticker, signal_date) → 선도 수익 wide-format 라벨 계산.
 
-보유 기간 3/5/10일 × 목표 수익률 3/5/10%의 9가지 조합을 단일 패스로 계산.
-라벨(label_Xd_Ypct)은 feature_engineering.py에서 동적으로 파생.
+사용 라벨 (18개):
+  label_Xd_Ypct_clean  — 목표 달성 + 달성 전 낙폭 임계치 이내
+  label_first_Xd_Ypct  — 상승 먼저 도달 여부 (낙폭 임계치 이내)
 
-라벨 정의:
-  entry_price      = T+1 시가
-  max_close_Xd     = T+1 ~ T+X 최고 종가 (EOD 매도로 달성 가능한 수익 기준)
-  max_drawdown_Xd  = (T+1~X 최저가 - entry_price) / entry_price
-  return_Xd        = (T+X 종가 - entry_price) / entry_price
+원시 측정값 (분석용 보존):
+  entry_price / max_close_Xd / max_drawdown_Xd / return_Xd
 """
 
 from __future__ import annotations
@@ -26,9 +24,6 @@ logger = logging.getLogger(__name__)
 _HOLD_DAYS = [3, 5, 10]
 _PCT_TARGETS = [3, 5, 10]
 
-# c2: 해당 기간 내 종가가 목표 이상인 날 >= 2일 (3d_10pct 제외 — 달성률 2.9%)
-_C2_COMBOS = [(3, 3), (3, 5), (5, 3), (5, 5), (5, 10), (10, 3), (10, 5), (10, 10)]
-
 # clean 라벨: 목표 달성 + 달성 전 낙폭이 임계치 이내 (R:R 비례)
 _DD_THRESH = {3: -0.015, 5: -0.025, 10: -0.04}
 
@@ -37,9 +32,6 @@ _LABEL_COLS = [
     "max_close_3d", "max_close_5d", "max_close_10d",
     "max_drawdown_3d", "max_drawdown_5d", "max_drawdown_10d",
     "return_3d", "return_5d", "return_10d",
-    *[f"c2_{d}d_{p}pct" for d, p in _C2_COMBOS],
-    *[f"label_{d}d_{p}pct" for d in _HOLD_DAYS for p in _PCT_TARGETS],
-    *[f"label_{d}d_{p}pct_c2" for d, p in _C2_COMBOS],
     *[f"label_{d}d_{p}pct_clean" for d in _HOLD_DAYS for p in _PCT_TARGETS],
     *[f"label_first_{d}d_{p}pct" for d in _HOLD_DAYS for p in _PCT_TARGETS],
 ]
@@ -77,19 +69,6 @@ def label_one(df_daily: pd.DataFrame, signal_date: str | date) -> dict | None:
         result[f"max_close_{d}d"] = max_close
         result[f"max_drawdown_{d}d"] = (min_low - entry_price) / entry_price
         result[f"return_{d}d"] = (close_n - entry_price) / entry_price
-
-    for d, pct in _C2_COMBOS:
-        w = window.iloc[:d]
-        threshold = entry_price * (1 + pct / 100)
-        result[f"c2_{d}d_{pct}pct"] = int((w["Close"] >= threshold).sum())
-
-    for d in _HOLD_DAYS:
-        mc = result[f"max_close_{d}d"]
-        for p in _PCT_TARGETS:
-            result[f"label_{d}d_{p}pct"] = int(mc >= entry_price * (1 + p / 100))
-
-    for d, p in _C2_COMBOS:
-        result[f"label_{d}d_{p}pct_c2"] = int(result[f"c2_{d}d_{p}pct"] >= 2)
 
     for d in _HOLD_DAYS:
         w = window.iloc[:d]

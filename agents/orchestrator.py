@@ -861,12 +861,6 @@ def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
 
     _LABEL_COLS = [
         "entry_price",
-        "label_3d_3pct", "label_3d_5pct", "label_3d_10pct",
-        "label_5d_3pct", "label_5d_5pct", "label_5d_10pct",
-        "label_10d_3pct", "label_10d_5pct", "label_10d_10pct",
-        "label_3d_3pct_c2", "label_3d_5pct_c2",
-        "label_5d_3pct_c2", "label_5d_5pct_c2", "label_5d_10pct_c2",
-        "label_10d_3pct_c2", "label_10d_5pct_c2", "label_10d_10pct_c2",
         "label_3d_3pct_clean", "label_3d_5pct_clean", "label_3d_10pct_clean",
         "label_5d_3pct_clean", "label_5d_5pct_clean", "label_5d_10pct_clean",
         "label_10d_3pct_clean", "label_10d_5pct_clean", "label_10d_10pct_clean",
