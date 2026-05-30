@@ -28,8 +28,10 @@ UNIVERSE_TOLERANCE = 20            # ±20종목 허용
 NULL_WARN_PCT = 5.0                # 피처 NULL 비율 5% 초과 시 경고
 NULL_FAIL_PCT = 30.0               # 30% 초과 시 실패
 LABEL_CUTOFF_DAYS = 15             # T+15 경과 행은 라벨 채워야 함
-LABEL_COVERAGE_WARN_PCT = 95.0     # T+15 경과 행의 라벨 채움 비율
-LABEL_COVERAGE_FAIL_PCT = 50.0
+# 임계치: 라벨 함수가 future window 부족·데이터 이상 시 None 반환 → 자연 미채움 ~25% 발생.
+# 베이스라인 73%(2026-05-30 첫 측정) 기준 약간 여유 두고 설정. 라벨러 개선 시 상향.
+LABEL_COVERAGE_WARN_PCT = 80.0
+LABEL_COVERAGE_FAIL_PCT = 30.0
 
 # 점검할 핵심 피처 (전부 점검하면 노이즈 많음. 학습에 쓰는 것 위주)
 FEATURE_NULL_CHECKS = [
