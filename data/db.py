@@ -249,10 +249,7 @@ CREATE TABLE IF NOT EXISTS universe_daily (
     label_5d_10pct_clean  BOOLEAN,
     label_10d_3pct_clean  BOOLEAN,
     label_10d_5pct_clean  BOOLEAN,
-    label_10d_10pct_clean BOOLEAN,
-    label_first_up_3pct   BOOLEAN,
-    label_first_up_5pct   BOOLEAN,
-    label_first_up_10pct  BOOLEAN
+    label_10d_10pct_clean BOOLEAN
 );
 """
 
@@ -335,9 +332,6 @@ ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_5d_10pct_clean  BOOLE
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_3pct_clean  BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_5pct_clean  BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_10d_10pct_clean BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_up_3pct   BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_up_5pct   BOOLEAN;
-ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_up_10pct  BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_3d_3pct   BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_3d_5pct   BOOLEAN;
 ALTER TABLE backtest_labels ADD COLUMN IF NOT EXISTS label_first_3d_10pct  BOOLEAN;
@@ -356,9 +350,6 @@ ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_5d_10pct_clean  BOOLEA
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_3pct_clean  BOOLEAN;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_5pct_clean  BOOLEAN;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_10d_10pct_clean BOOLEAN;
-ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_3pct   BOOLEAN;
-ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_5pct   BOOLEAN;
-ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS label_first_up_10pct  BOOLEAN;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_3d_3pct_clean    DOUBLE;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_3d_5pct_clean    DOUBLE;
 ALTER TABLE universe_daily ADD COLUMN IF NOT EXISTS pred_3d_10pct_clean   DOUBLE;
@@ -419,6 +410,12 @@ ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_5d_10pct_c2;
 ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_3pct_c2;
 ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_5pct_c2;
 ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_10d_10pct_c2;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_first_up_3pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_first_up_5pct;
+ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_first_up_10pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_first_up_3pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_first_up_5pct;
+ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_first_up_10pct;
 """
 
 
