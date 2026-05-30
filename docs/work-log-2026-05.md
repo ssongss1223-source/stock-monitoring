@@ -2,6 +2,51 @@
 
 ---
 
+## 2026-05-30 세션 59 — P3 완료 (universe_predictions + universe_outcomes 신설)
+- 작업: P3 설계 확정 + 구현 + VM 배포 + backfill 시작
+- 변경 사항:
+  - `062fa1c`: P3 신설
+    * `data/db.py`: universe_predictions (long, 5컬럼) + universe_outcomes (raw 7컬럼) DDL 추가
+    * `backtest/labeler.py`: `compute_outcomes_universe(date_str)` 추가 — 전체 유니버스 350종목 raw measurement 계산 후 universe_outcomes INSERT
+    * `agents/orchestrator.py`: `_update_universe_preds()` → universe_predictions dual write 추가 / `_pipeline()` → 10거래일 전 예측일 universe_outcomes INSERT 추가
+    * `scripts/backfill_p3.py`: 기존 pred_* 컬럼 소급 + 과거 outcomes 소급 (1회 실행)
+  - VM: init_db() 실행 → 2테이블 생성 / backfill_p3.py screen 백그라운드 실행 중
+- 설계 결정 사항:
+  - universe_labels(wide) 대신 universe_outcomes(7컬럼 raw) 채택 — binary 라벨 미저장, 학습 시 동적 계산
+  - label_first: Hybrid 방식 — 저장 안 하고 학습 시 ohlcv_daily JOIN으로 즉석 계산
+  - universe_predictions model_type: P3는 'ensemble'만, P4에서 xgb/lgbm/catboost 개별 저장 추가
+  - 임계치(수익목표%, 낙폭%) 최적화: universe_outcomes의 max_close/max_drawdown으로 학습 시 파라미터로 관리
+- 관련 파일: `data/db.py`, `backtest/labeler.py`, `agents/orchestrator.py`, `scripts/backfill_p3.py`
+- 다음: backfill 완료 확인 → P4(CatBoost) or P5(TopK 평가)
+
+## 2026-05-30 세션 58 — P2 전체 완료 (메타 테이블 신설 + 모델 품질 점검)
+- 작업: label_first_up_* 정리, feature_catalog/model_registry/evaluation_history 신설, verify_data_quality 모델 점검 추가
+- 변경 사항:
+  - `dd4c47c`: `label_first_up_{3/5/10}pct` 3개 컬럼 폐기
+    * `data/db.py`: CREATE TABLE 및 _MIGRATIONS ADD COLUMN 제거, DROP COLUMN IF EXISTS 6행 추가
+    * DB: backtest_labels 33→30컬럼 / universe_daily 84→81컬럼
+  - `0a8cf83`: P2-1/2/3 메타 테이블 신설
+    * `data/db.py`: feature_catalog / model_registry / evaluation_history 3개 CREATE TABLE 추가
+    * `data/db.py`: `_FEATURE_CATALOG_ROWS` (48피처 × section/used_in_train), `_seed_feature_catalog()`, `register_models_from_json()` 추가
+    * `scripts/train_models.py`: `_brier_from_oof()`, `_write_to_db()` 추가 — 훈련 후 자동 DB 등록
+    * VM: `init_db()` 실행 → 3테이블 생성 + feature_catalog 48행 seed
+    * VM: `register_models_from_json('data/model_results.json')` → model_registry 54행 / evaluation_history 54행 등록
+  - `9b815c2`: P2-4 모델 품질 점검 + _LABEL_AUC DB 연동
+    * `scripts/verify_data_quality.py`: `check_model_quality()` 추가 (Section 4)
+      - xgb/lgbm OOF AUC FAIL<0.52 / WARN<0.55 / staleness 90일
+      - ET는 추론 미사용으로 점검 제외
+      - `--verbose` 시 모델별 개별 출력
+    * `agents/report.py`: `_LABEL_AUC` 하드코딩 → `_load_label_auc()` (model_registry AVG 조회, 실패 시 폴백)
+- verify 최종: OK 22 / WARN 2 / FAIL 0
+  - WARN: xgb/lgbm 3pct 단기 라벨 AUC 0.54~0.55 (예측 난이도 높음 — 정상 범위)
+- 메모:
+  - ET 모델 개당 420~430MB → e2-medium 4GB로도 18개 동시 로드 불가 (총 7.6GB). ET 추론 제외 유지.
+  - brier는 evaluation_history에 컬럼 존재하나 현재 NULL — 기존 model_results.json에 없었고 다음 train_models.py 실행부터 자동 채워짐
+  - report.py _LABEL_AUC: 기존 하드코딩 값은 _LABEL_AUC_FALLBACK으로 보존, DB 조회 성공 시 최신 AUC 반영
+- 다음: P3 필요성 판단 or 현 시스템 안정화 + 재훈련 주기 설정
+
+---
+
 ## 2026-05-30 세션 57 — label cleanup + P1 완료 + label_Xd_Ypct/c2 폐기
 - 작업: P1 마무리 (verify_data_quality 이슈 ②fix + backfill), deprecated 라벨 컬럼 완전 제거
 - 변경 사항:
