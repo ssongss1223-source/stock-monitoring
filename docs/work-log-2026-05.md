@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-30 세션 57 — label cleanup + P1 완료 + label_Xd_Ypct/c2 폐기
+- 작업: P1 마무리 (verify_data_quality 이슈 ②fix + backfill), deprecated 라벨 컬럼 완전 제거
+- 변경 사항:
+  - `bea26c8`: `_auto_label_universe_unlabeled` _LABEL_COLS에 _clean/_first 18개 누락 보강 + WHERE 조건 강화. backfill 1404건
+  - `eaba05a`/`d7db436`: verify 임계치 조정 80→90% (베이스라인 73→91% 개선 반영)
+  - `3f5f66e`: `label_Xd_Ypct` 9개 + `label_Xd_Ypct_c2` 8개 + `c2_Xd_Ypct` 8개 = 25개 컬럼 완전 폐기
+    * `backtest/labeler.py`: _C2_COMBOS 제거, _LABEL_COLS 단순화, label_one() 블록 3개 제거
+    * `agents/orchestrator.py`: 로컬 _LABEL_COLS entry_price + clean9 + first9로 정리
+    * `data/db.py`: CREATE TABLE 정리 + DROP COLUMN 44개 마이그레이션 추가
+    * DB: backtest_labels 58→33컬럼 / universe_daily 101→84컬럼
+- verify 최종: OK 21 / WARN 0 / FAIL 0
+- 메모:
+  - _LABEL_COLS 누락 버그가 핵심 — 라벨 함수가 계산은 했지만 SET clause에 없어 영원히 NULL이었음
+  - `label_first_up_*` 3개는 여전히 DB에 남아있음 (코드 미사용). 다음 정리 시 검토
+- 다음: P2 — feature_catalog + model_registry + evaluation_history 메타 테이블
+
+---
+
 ## 2026-05-30 세션 56 — 텔레그램 정렬 변경 + VM 증설 + 아키텍처 로드맵 합의
 - 작업:
   1. 텔레그램 정렬 로직 변경 (`e6bfb72`)
