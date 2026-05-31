@@ -190,10 +190,31 @@ def _build_message(
     return "\n\n".join(parts)
 
 
+def _get_data_date() -> str:
+    try:
+        conn = get_conn(read_only=True)
+        row = conn.execute("SELECT MAX(date) FROM universe_features_daily").fetchone()
+        conn.close()
+        if row and row[0]:
+            return str(row[0])
+    except Exception:
+        pass
+    return ""
+
+
 def _header() -> str:
     from datetime import date
-    today = date.today().strftime("%Y-%m-%d")
-    return f"📈 <b>주식 신호 알림 — {today}</b>\n  전일 종가 기준 | KST 06:00"
+    today = date.today()
+    weekday = ["월", "화", "수", "목", "금", "토", "일"][today.weekday()]
+    today_str = f"{today.strftime('%Y-%m-%d')}({weekday})"
+
+    data_date = _get_data_date()
+    data_str = f"{data_date} 종가 기준" if data_date else "전일 종가 기준"
+
+    kst_hour = (config.SCHEDULE_HOUR_UTC + 9) % 24
+    time_str = f"KST {kst_hour:02d}:{config.SCHEDULE_MINUTE_UTC:02d}"
+
+    return f"📈 <b>주식 신호 알림 — {today_str}</b>\n  {data_str} | {time_str}"
 
 
 def _market_section(markets: dict[str, MarketContext]) -> str:
