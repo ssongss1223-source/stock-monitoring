@@ -308,14 +308,8 @@ def _four_groups(
 
 
 def _is_large_cap(s: BuySignal) -> bool:
-    """KOSPI 100위 이내 or KOSDAQ 50위 이내."""
-    if not s.market or not s.mktcap_rank:
-        return False
-    if s.market == "KOSPI":
-        return s.mktcap_rank <= 100
-    if s.market == "KOSDAQ":
-        return s.mktcap_rank <= 50
-    return False
+    """시총 5조 이상 = 대형주 (KOSPI/KOSDAQ 무관 일관 기준)."""
+    return (s.market_cap or 0) >= 5e12
 
 
 def _sort_signals(
