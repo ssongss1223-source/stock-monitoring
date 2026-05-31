@@ -249,8 +249,8 @@ def main() -> None:
     out_dir.mkdir(exist_ok=True)
 
     # Step 5: OOF 저장용 DataFrame 기반 컬럼 준비 (max_close_* 없을 수 있음)
-    oof_cols = ["signal_date", "ticker", "entry_price"]
-    for col in ["max_close_3d", "max_close_5d", "max_close_10d"]:
+    oof_cols = ["signal_date", "ticker"]
+    for col in ["entry_price", "max_close_3d", "max_close_5d", "max_close_10d"]:
         if col in df.columns:
             oof_cols.append(col)
     oof_df = df[oof_cols].copy()
@@ -290,7 +290,7 @@ def main() -> None:
         # 수익률: max_close / entry_price - 1 (first_touch 또는 max_close 없으면 None)
         max_return = (
             (df[max_close_col] / df["entry_price"].replace(0, np.nan) - 1)
-            if max_close_col else None
+            if max_close_col and "entry_price" in df.columns else None
         )
 
         print(f"{'='*62}")
