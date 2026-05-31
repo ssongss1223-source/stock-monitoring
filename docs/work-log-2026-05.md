@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-05-31 세션 60 — P4 재정의 + ET 운영 복귀
+- 작업: backfill 완료 확인 → P4 알고리즘 검토(데이터 기반) → ET 운영 복귀 배포
+- 핵심 발견:
+  - 운영 추론(`ml_scorer`)이 그동안 **xgb+lgbm 단순평균만** 사용 (ET는 옛 RAM 969MB 제약으로 제외, docstring과 코드 불일치)
+  - xgb↔lgbm OOF 상관 **0.82** = 중복 → CatBoost(GBDT) 추가 효과 낮음 → **원래 P4 계획(CatBoost) 폐기**
+  - "soft 앙상블이 ET 단독에 참패"는 전체기간 top20 기준 착시 — 운영과 동일한 **일별 top-20**에선 격차 소멸
+  - 진짜 레버는 **ET 복귀**: 일별 Prec@20 24.0%→24.8% (+0.8%p)
+- 변경 사항:
+  - `c89fbf9`: `agents/ml_scorer.py` `_MODEL_TYPES`에 `("et",".pkl")` 추가 + docstring. 합치기 `np.mean` 유지(ET 추가만으로 자동 3개 평균, 확률 스케일 보존)
+  - rank 앙상블은 채택 안 함 — 출력이 순위점수라 0.60 threshold·universe_predictions 확률 저장과 충돌, OOF는 단순평균과 동급
+- 검증:
+  - ET 메모리 실측(monkeypatch): peak RSS 1.1GB / 추론 57초 / 18라벨·351종목·에러0 (기준선 xgb+lgbm: 297MB·1초)
+  - 호출처 전부 06 배치 경로(`_pipeline` line 271·298) → 57초 지연 무방
+  - VM pull·import·서비스 재시작 정상
+  - backfill 완료: universe_outcomes 575 distinct date (미반영 10일은 최근 future price 미확정 = 정상)
+- 관련 파일: `agents/ml_scorer.py`, `data/oof_predictions.parquet`
+- 다음: 6/1 05:00 KST 배치 후 ET 추론 검증 → LR 베이스 추가(요청3) → feature 트랙
+
 ## 2026-05-30 세션 59 — P3 완료 (universe_predictions + universe_outcomes 신설)
 - 작업: P3 설계 확정 + 구현 + VM 배포 + backfill 시작
 - 변경 사항:

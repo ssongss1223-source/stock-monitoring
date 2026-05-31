@@ -1,55 +1,56 @@
 # Checkpoint
 
 ## Current Goal
-- **P3 완료** → backfill 완료 후 P4(CatBoost) 또는 P5(TopK 평가) 진입
+- **P4 = 운영 라인업 정상화** 진행 중 — ET 복귀 완료(배포됨), 다음은 LR 베이스 추가 검토
 
 ## Current Status
-- **코드** `062fa1c` — 로컬/VM 동일
-- **서비스** active (e2-medium, PID 411)
+- **코드** `c89fbf9` — 로컬/VM 동일 (ET 복귀 배포 완료, 서비스 재시작됨)
+- **서비스** active
 - **DB**
   - `backtest_labels` 30컬럼 / `universe_daily` 81컬럼
-  - `universe_predictions` 12,636행 (2일치, 351종목 × 18라벨)
-  - `universe_outcomes` 백그라운드 backfill 진행 중 (581일 중 ~20+ 완료, 예상 ~75분)
-- **메타 테이블** feature_catalog 48행 / model_registry 54행 / evaluation_history 54행
+  - `universe_outcomes` backfill 완료 — 575 distinct date (2024-01-02~2026-05-14, 652,191행). 미반영 10일은 최근(05-15~)이라 future price 미확정 = 정상, run_daily가 자동 충원
+- **메타 테이블** feature_catalog 48 / model_registry 54 / evaluation_history 54
+
+## P4 진단 결과 (데이터 기반)
+- 운영 추론은 그동안 **xgb+lgbm 단순평균만** 사용 (ET는 옛 RAM 제약으로 제외돼 있었음)
+- xgb↔lgbm OOF 상관 **0.82** = 사실상 중복 → CatBoost(또 다른 GBDT) 추가는 효과 낮음 → **CatBoost 폐기**
+- **ET 복귀가 핵심 레버**: 일별 top-20 Prec@20 24.0%→24.8% (+0.8%p, 18라벨 대부분 개선)
+- ET 메모리 실측: peak RSS 1.1GB (가용 3.1GB) / 추론 57초 — 배치라 무방
+- rank 앙상블은 0.60 threshold·확률 저장과 충돌 + OOF 동급 → **단순평균 유지**(확률 스케일 보존)
 
 ## Done
-- `062fa1c` P3: universe_predictions(long) + universe_outcomes(raw 7컬럼) 신설 + backfill
-- `9b815c2` P2-4: verify_data_quality 모델 품질 점검 + report.py _LABEL_AUC DB 연동
-- `0a8cf83` P2-1/2/3: feature_catalog(48피처) + model_registry(54모델) + evaluation_history
-- `dd4c47c` label_first_up_* 3개 컬럼 DROP (구버전 설계 잔재 정리)
-- VM 증설 e2-medium 4GB / 50GB (2026-05-30)
+- `c89fbf9` ml_scorer ET 운영 복귀 — XGB+LGBM+ET soft voting (단순평균, 확률 보존)
+- universe_outcomes backfill 완료 확인 (575일)
+- `062fa1c` P3: universe_predictions(long) + universe_outcomes(raw 7컬럼) 신설
+- `9b815c2` P2-4: verify_data_quality 모델 품질 점검 + report.py AUC DB 연동
+- `0a8cf83` P2-1/2/3: feature_catalog + model_registry + evaluation_history
 
 ## Remaining
-- **backfill 완료 확인**: universe_outcomes 581일 소급 완료 여부 (screen 백그라운드 실행 중)
-- **[P4]** CatBoost 추가 — universe_outcomes + universe_predictions 기반 첫 학습·평가
-- **[P5]** TopK·Brier·Lift 평가 구현 — universe_predictions JOIN universe_outcomes (+ ohlcv_daily for label_first)
-- **재훈련 주기**: model_registry train_date 90일 기준 알람 미구현
+- **6/1 05:00 KST 배치 검증**: ET 추론 정상 작동 (universe ML 추론 로그 / universe_predictions 신규 INSERT / 메모리)
+- **요청3 LR 베이스 추가**: LR을 베이스 모델로 학습 → OOF로 다양성·효과 측정 (현재 LR은 stacker 전용이라 OOF 없음)
+- **feature 트랙** (나중): ml_additional_features.md 기반 — AUC 0.57 천장 돌파. 알고리즘과 독립이라 병렬 가능
+- **[P5]** TopK·Brier·Lift 평가 구현 — universe_predictions JOIN universe_outcomes
+- 재훈련 주기: model_registry train_date 90일 기준 알람 미구현
 
 ## Risks / Blockers
 - **8/4** Cloud Billing 유료 업그레이드 필수 (무료 체험 만료 → VM 자동 stop, **7월 말까지** 클릭)
-- 로컬 `mcp__stock-db` DB 락 충돌 — VM `sudo -u stock ./.venv/bin/python` 사용
-- universe_predictions: 현재 2일치(pred_* 컬럼 있던 날만) — 시간 지나면 자연 증가
-- label_first 최적화는 학습 시 ohlcv_daily JOIN으로 처리 (Hybrid, 저장 안 함)
+- ET 추론이 배치당 2회(score_all_labels + score_universe_all) 각각 18×~400MB 디스크 로드 = ~114초 중복 I/O. 향후 모델 전역 캐싱으로 최적화 여지
+- 로컬 `mcp__stock-db` DB 락 충돌 — VM `sudo -u stock .venv/bin/python3` 사용
 
 ## Next Actions
-1. backfill 완료 확인 (`SELECT COUNT(DISTINCT date) FROM universe_outcomes` → 581 기대)
-2. run_daily 다음 실행(05:00 KST) 후 universe_predictions/outcomes 신규 날짜 INSERT 확인
-3. P4 시작: CatBoost 추가 + universe_outcomes 기반 train_models.py 수정
-4. P5: TopK precision/return 평가 함수 구현
+1. 6/1 05:00 KST 배치 후 ET 추론 검증 (`journalctl` + universe_predictions 신규 날짜)
+2. 요청3: LR 베이스 추가 학습 + OOF 효과 측정
+3. feature 트랙 아이디에이션 (병렬 시작 가능)
 
 ## References
 - **VM**: e2-medium, us-central1-a, `/opt/stock-monitor`
-- **서비스**: `stock-monitor.service` (stock user, APScheduler)
 - **스케줄**: run_collect 07:00 UTC (16:00 KST) / run_daily 20:00 UTC (05:00 KST)
-- **로드맵**: `docs/architecture-roadmap.md` — D1-D8 + Phase 1-7
 - **핵심 파일**:
-  - `agents/orchestrator.py` (`_ML_PROB_THRESHOLD=0.60`, `_update_universe_preds`, `_pipeline`)
-  - `backtest/labeler.py` (`compute_outcomes_universe()` — 전체 유니버스 outcomes)
-  - `scripts/backfill_p3.py` (소급 반영, 1회용)
-  - `data/db.py` (universe_predictions + universe_outcomes DDL)
-- **P3 테이블 구조**:
-  - `universe_predictions`: (date, ticker, model_type, label, prob) — model_type='ensemble' (P4에서 xgb/lgbm/catboost 추가)
-  - `universe_outcomes`: (date, ticker, hold_days, entry_price, max_close, max_drawdown, return_close) — binary 라벨 없음, 학습 시 동적 계산
+  - `agents/ml_scorer.py` (`_MODEL_TYPES`=xgb/lgbm/et, `score_universe_all`, `score_all_labels` — 단순평균)
+  - `agents/orchestrator.py` (`_ML_PROB_THRESHOLD=0.60`, `_pipeline` line 271·298 ML 추론 호출)
+  - `scripts/train_models.py` (멀티모델 학습 — xgb/lgbm/et/lr-stacker, OOF→model_results.json)
+  - `data/oof_predictions.parquet` (OOF 예측값 — 앙상블 전략 백테스트용)
+- **모델 성적 (OOF)**: 베이스 AUC 0.57 수준 / 일별 Prec@20 xgb+lgbm+et ≈ 24.8%
 
 ## Last Updated
-- 2026-05-30 22:30 KST
+- 2026-05-31 10:35 KST
