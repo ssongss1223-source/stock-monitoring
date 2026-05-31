@@ -114,13 +114,15 @@ class Orchestrator:
             logger.warning("재발송할 S등급(RR≥2.0) 신호 없음")
             return
 
-        # market/mktcap_rank: pykrx last trading day 기준으로 보정 (오늘 universe와 무관)
-        live_rank, live_market = _get_rank_and_market()
+        # market/mktcap_rank/market_cap: pykrx last trading day 기준으로 보정 (오늘 universe와 무관)
+        live_rank, live_market, live_cap = _get_rank_and_market()
         for s in buy_signals:
             if not s.market:
                 s.market = live_market.get(s.ticker, "")
             if s.mktcap_rank is None:
                 s.mktcap_rank = live_rank.get(s.ticker)
+            if s.market_cap is None:
+                s.market_cap = live_cap.get(s.ticker)
 
         # label_probs 없으면 fresh ML 추론 (format test 용)
         if not any(s.label_probs for s in buy_signals):
@@ -259,10 +261,11 @@ class Orchestrator:
 
         # ── 4. market / 시총 순위 세팅 (저장 전에 먼저) ──────────────────────
         ticker_market = {t: m for t, m in universe}
-        mktcap_rank = _get_mktcap_rank()
+        mktcap_rank, _mkt, mktcap_cap = _get_rank_and_market()
         for s in buy_signals:
             s.market = ticker_market.get(s.ticker, "")
             s.mktcap_rank = mktcap_rank.get(s.ticker)
+            s.market_cap = mktcap_cap.get(s.ticker)
 
         # ── 4b. 앙상블 추론 + signal_history / signal_xgb_probs 저장 ──────────
         if buy_signals:
@@ -336,6 +339,7 @@ class Orchestrator:
                 target_is_resistance=_target_is_res,
                 market=ticker_market.get(_tk, ""),
                 mktcap_rank=mktcap_rank.get(_tk),
+                market_cap=mktcap_cap.get(_tk),
                 label_probs=_lp,
             ))
         logger.info("ML-only 신호: %d종목 (threshold=%.2f, RR≥2.0)", len(ml_only_signals), _ML_PROB_THRESHOLD)
@@ -450,12 +454,12 @@ def _is_trading_day() -> bool:
 
 
 def _get_mktcap_rank() -> dict[str, int]:
-    rank, _ = _get_rank_and_market()
+    rank, _, _cap = _get_rank_and_market()
     return rank
 
 
-def _get_rank_and_market() -> tuple[dict[str, int], dict[str, str]]:
-    """시총 순위 + 시장(KOSPI/KOSDAQ) 동시 반환. DB 최근 거래일 기준."""
+def _get_rank_and_market() -> tuple[dict[str, int], dict[str, str], dict[str, float]]:
+    """시총 순위 + 시장(KOSPI/KOSDAQ) + 시총 절대값 동시 반환. DB 최근 거래일 기준."""
     try:
         conn = get_conn(read_only=True)
         try:
@@ -465,6 +469,7 @@ def _get_rank_and_market() -> tuple[dict[str, int], dict[str, str]]:
             conn.close()
         rank_result: dict[str, int] = {}
         market_result: dict[str, str] = {}
+        cap_result: dict[str, float] = {}
         for mkt in ("KOSPI", "KOSDAQ"):
             df = stock.get_market_cap_by_ticker(trade_date, market=mkt)
             if df is None or df.empty:
@@ -476,10 +481,11 @@ def _get_rank_and_market() -> tuple[dict[str, int], dict[str, str]]:
             for rank, ticker in enumerate(df.index, 1):
                 rank_result[ticker] = rank
                 market_result[ticker] = mkt
-        return rank_result, market_result
+                cap_result[ticker] = float(df.at[ticker, cap_col])
+        return rank_result, market_result, cap_result
     except Exception:
         logger.warning("시총 순위 조회 실패")
-        return {}, {}
+        return {}, {}, {}
 
 
 def _save_signal_history(signals: list[BuySignal]) -> None:
