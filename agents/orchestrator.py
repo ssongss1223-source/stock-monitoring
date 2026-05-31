@@ -937,11 +937,11 @@ def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
     try:
         conn.register("_lbls", df_labels)
         conn.execute(f"""
-            UPDATE universe_daily ud
+            UPDATE universe_daily
             SET {set_clause}
             FROM _lbls s
-            WHERE ud.date = CAST(s.date AS DATE)
-              AND ud.ticker = s.ticker
+            WHERE universe_daily.date = CAST(s.date AS DATE)
+              AND universe_daily.ticker = s.ticker
         """)
         logger.info("universe_daily 라벨 UPDATE 완료: %d건", len(labeled_rows))
     except Exception:
