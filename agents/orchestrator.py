@@ -887,7 +887,7 @@ def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
     try:
         rows = conn.execute("""
             SELECT ticker, date::VARCHAR FROM universe_daily
-            WHERE (label_3d_3pct IS NULL OR label_3d_3pct_clean IS NULL OR label_first_3d_3pct IS NULL)
+            WHERE (label_3d_3pct_clean IS NULL OR label_first_3d_3pct IS NULL)
               AND date <= CAST(? AS DATE)
             ORDER BY date, ticker
         """, [cutoff]).fetchall()
