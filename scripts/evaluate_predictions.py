@@ -35,7 +35,15 @@ _ALL_LABELS = [
 ]
 
 # 라벨별 최소 hold 기간 (outcome 확인까지 대기해야 하는 거래일 수)
-_LABEL_HOLD = {k: int(k.split("_")[0][:-1]) for k in _ALL_LABELS}
+def _get_hold_days(label: str) -> int:
+    """라벨에서 일수 추출 (예: '3d_3pct_clean' → 3, 'first_5d_3pct' → 5)."""
+    parts = label.split("_")
+    for part in parts:
+        if part.endswith("d"):
+            return int(part[:-1])
+    return 0
+
+_LABEL_HOLD = {k: _get_hold_days(k) for k in _ALL_LABELS}
 
 
 def _label_col(label: str) -> str:
@@ -117,8 +125,11 @@ def _prec_at_k(group: pd.DataFrame, k: int) -> float | None:
     return float(top["actual"].mean())
 
 
-def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_k: int = 20) -> pd.DataFrame:
-    """라벨별 Brier / Prec@10 / Prec@20 / Lift@20 계산."""
+def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_ks: list[int] = None) -> pd.DataFrame:
+    """라벨별 Brier / Prec@K / Lift@K 계산. top_ks 리스트의 각 K에 대해 열 생성."""
+    if top_ks is None:
+        top_ks = [5, 10, 20, 30]
+
     records = []
     for label in _ALL_LABELS:
         sub = df[df["label"] == label].copy()
@@ -128,68 +139,81 @@ def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_k: int =
         n_pairs = len(sub_labeled)
 
         if n_pairs == 0:
-            records.append({
+            record: dict = {
                 "label": label, "n_dates": 0, "n_pairs": 0,
-                "brier": None, "prec_at_10": None, "prec_at_20": None, "lift_at_20": None,
-                "base_rate": base_rates.get(label),
-            })
+                "brier": None, "base_rate": base_rates.get(label),
+            }
+            for k in top_ks:
+                record[f"prec_at_{k}"] = None
+                record[f"lift_at_{k}"] = None
+            records.append(record)
             continue
 
-        # Brier
         brier = float(((sub_labeled["prob"] - sub_labeled["actual"]) ** 2).mean())
-
-        # Prec@K — per date 평균
-        prec10_per_date = (
-            sub_labeled.groupby("signal_date")
-            .apply(lambda g: _prec_at_k(g, 10))
-            .dropna()
-        )
-        prec20_per_date = (
-            sub_labeled.groupby("signal_date")
-            .apply(lambda g: _prec_at_k(g, top_k))
-            .dropna()
-        )
-
-        prec10 = float(prec10_per_date.mean()) if not prec10_per_date.empty else None
-        prec20 = float(prec20_per_date.mean()) if not prec20_per_date.empty else None
         base = base_rates.get(label)
-        lift20 = (prec20 / base) if (prec20 is not None and base and base > 0) else None
 
-        records.append({
+        record = {
             "label": label, "n_dates": n_dates, "n_pairs": n_pairs,
             "brier": round(brier, 4),
-            "prec_at_10": round(prec10, 4) if prec10 is not None else None,
-            "prec_at_20": round(prec20, 4) if prec20 is not None else None,
-            "lift_at_20": round(lift20, 2) if lift20 is not None else None,
             "base_rate": round(base, 4) if base else None,
-        })
+        }
+
+        for k in top_ks:
+            prec_per_date = (
+                sub_labeled.groupby("signal_date")
+                .apply(lambda g, _k=k: _prec_at_k(g, _k))
+                .dropna()
+            )
+            prec = float(prec_per_date.mean()) if not prec_per_date.empty else None
+            lift = (prec / base) if (prec is not None and base and base > 0) else None
+            record[f"prec_at_{k}"] = round(prec, 4) if prec is not None else None
+            record[f"lift_at_{k}"] = round(lift, 2) if lift is not None else None
+
+        records.append(record)
 
     return pd.DataFrame(records)
 
 
 def print_report(metrics: pd.DataFrame, from_date: str, to_date: str) -> None:
+    top_ks = sorted([int(c.replace("prec_at_", "")) for c in metrics.columns if c.startswith("prec_at_")])
+
+    header = f"{'라벨':22s} {'N일':>4s} {'N건':>6s}  {'Brier':>6s}"
+    for k in top_ks:
+        header += f"  {'P@' + str(k):>6s}"
+    for k in top_ks:
+        header += f"  {'L@' + str(k):>5s}"
+    header += f"  {'Base':>5s}"
+
     print(f"\n=== P5 라이브 예측 평가 ({from_date} ~ {to_date}) ===\n")
-    print(f"{'라벨':22s} {'N일':>4s} {'N건':>6s}  {'Brier':>6s}  {'P@10':>6s}  {'P@20':>6s}  {'Lift':>5s}  {'Base':>5s}")
-    print("-" * 75)
+    print(header)
+    print("-" * len(header))
 
     for _, row in metrics.iterrows():
         label = str(row["label"])
         n_dates = int(row["n_dates"]) if pd.notna(row["n_dates"]) else 0
         n_pairs = int(row["n_pairs"]) if pd.notna(row["n_pairs"]) else 0
         brier = f"{row['brier']:.4f}" if pd.notna(row.get("brier")) else "  N/A "
-        p10 = f"{row['prec_at_10']:.2%}" if pd.notna(row.get("prec_at_10")) else "  N/A "
-        p20 = f"{row['prec_at_20']:.2%}" if pd.notna(row.get("prec_at_20")) else "  N/A "
-        lift = f"{row['lift_at_20']:.2f}x" if pd.notna(row.get("lift_at_20")) else " N/A "
         base = f"{row['base_rate']:.2%}" if pd.notna(row.get("base_rate")) else " N/A "
-        print(f"{label:22s} {n_dates:>4d} {n_pairs:>6d}  {brier:>6s}  {p10:>6s}  {p20:>6s}  {lift:>5s}  {base:>5s}")
+
+        line = f"{label:22s} {n_dates:>4d} {n_pairs:>6d}  {brier:>6s}"
+        for k in top_ks:
+            v = row.get(f"prec_at_{k}")
+            line += f"  {f'{v:.2%}':>6s}" if pd.notna(v) else "    N/A"
+        for k in top_ks:
+            v = row.get(f"lift_at_{k}")
+            line += f"  {f'{v:.2f}x':>5s}" if pd.notna(v) else "   N/A"
+        line += f"  {base:>5s}"
+        print(line)
 
     print()
     labeled = metrics[metrics["n_pairs"] > 0]
     if not labeled.empty:
         avg_brier = labeled["brier"].mean()
-        avg_p20 = labeled["prec_at_20"].mean()
-        avg_lift = labeled["lift_at_20"].mean()
-        print(f"평균 (라벨 있는 {len(labeled)}개): Brier={avg_brier:.4f}  P@20={avg_p20:.2%}  Lift={avg_lift:.2f}x")
+        k_summary = "  ".join(
+            f"P@{k}={labeled[f'prec_at_{k}'].mean():.2%}  L@{k}={labeled[f'lift_at_{k}'].mean():.2f}x"
+            for k in top_ks if f"prec_at_{k}" in labeled.columns
+        )
+        print(f"평균 (라벨 있는 {len(labeled)}개): Brier={avg_brier:.4f}  {k_summary}")
 
 
 def save_to_db(metrics: pd.DataFrame, eval_date: str) -> None:
@@ -219,7 +243,10 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="P5 라이브 예측 평가")
     parser.add_argument("--from-date", default=None, help="평가 시작일 YYYY-MM-DD (기본: 30일 전)")
     parser.add_argument("--to-date", default=None, help="평가 종료일 YYYY-MM-DD (기본: 오늘)")
-    parser.add_argument("--top-k", type=int, default=20, help="Precision@K의 K값 (기본: 20)")
+    parser.add_argument(
+        "--top-k", type=int, nargs="+", default=[5, 10, 20, 30],
+        help="Precision@K의 K값 목록 (기본: 5 10 20 30)",
+    )
     parser.add_argument("--save", action="store_true", help="결과를 evaluation_history에 저장")
     args = parser.parse_args()
 
@@ -243,7 +270,7 @@ def main() -> None:
         sys.exit(0)
 
     base_rates = _load_base_rates(from_date, to_date)
-    metrics = compute_metrics(df, base_rates, top_k=args.top_k)
+    metrics = compute_metrics(df, base_rates, top_ks=args.top_k)
     print_report(metrics, from_date, to_date)
 
     if args.save:
