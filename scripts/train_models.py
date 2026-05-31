@@ -267,8 +267,8 @@ def main() -> None:
         # ── 체크포인트 복구 ────────────────────────────────────────────────
         ckpt_oof = out_dir / f"oof_ckpt_{label_key}.parquet"
         ckpt_sum = out_dir / f"summary_ckpt_{label_key}.json"
-        if (out_dir / f"xgb_label_{label_key}.json").exists() and ckpt_oof.exists() and ckpt_sum.exists() and (out_dir / f"lr_base_label_{label_key}.pkl").exists():
-            print(f"  → 체크포인트 복구: {target} (건너뜀)")
+        if (out_dir / f"xgb_label_{label_key}.json").exists() and ckpt_oof.exists() and ckpt_sum.exists():
+            print(f"  → 체크포인트 복구: {target}")
             df_ckpt = pd.read_parquet(ckpt_oof)
             for col in df_ckpt.columns:
                 oof_df[col] = df_ckpt[col].values
@@ -277,6 +277,17 @@ def main() -> None:
             summary.append(_ckpt["row"])
             if _ckpt.get("model_meta"):
                 model_meta[label_key] = _ckpt["model_meta"]
+            # lr_base OOF가 없으면 이 라벨만 보완 학습
+            if f"lr_base_oof_{label_key}" not in df_ckpt.columns:
+                print(f"     lr_base OOF 없음 → lr_base CV 보완")
+                y_ckpt = df[target]
+                lr_base_fold_aucs, lr_base_oof = _lr_base_cv(X, y_ckpt)
+                oof_df[f"lr_base_oof_{label_key}"] = lr_base_oof
+                _ckpt["row"]["lr_base_auc"] = float(np.mean(lr_base_fold_aucs))
+                print(f"     LR_B  fold AUC: {np.mean(lr_base_fold_aucs):.4f}")
+                lr_base_m, lr_base_scaler, lr_base_cols = _lr_base_final(X, y_ckpt)
+                joblib.dump({"model": lr_base_m, "scaler": lr_base_scaler, "feat_cols": lr_base_cols},
+                            str(out_dir / f"lr_base_label_{label_key}.pkl"))
             continue
 
         if label_key.startswith("first_"):
