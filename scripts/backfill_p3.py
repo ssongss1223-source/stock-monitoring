@@ -67,7 +67,8 @@ def backfill_predictions() -> None:
     ).dropna(subset=["prob"])
     df_long["model_type"] = "ensemble"
     df_long["label"] = df_long["col_name"].str.removeprefix("pred_")
-    df_long = df_long[["date", "ticker", "model_type", "label", "prob"]]
+    df_long["model_ver"] = None  # 소급 행은 어느 버전인지 미상
+    df_long = df_long[["date", "ticker", "model_type", "label", "prob", "model_ver"]]
 
     logger.info("long format 변환: %d행", len(df_long))
 
@@ -76,8 +77,8 @@ def backfill_predictions() -> None:
         conn.register("_pred_long", df_long)
         conn.execute("""
             INSERT OR REPLACE INTO universe_predictions
-                (date, ticker, model_type, label, prob)
-            SELECT date, ticker, model_type, label, prob
+                (date, ticker, model_type, label, prob, model_ver)
+            SELECT date, ticker, model_type, label, prob, model_ver
             FROM _pred_long
         """)
         logger.info("universe_predictions INSERT 완료: %d행", len(df_long))

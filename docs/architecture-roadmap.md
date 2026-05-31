@@ -9,8 +9,8 @@
 
 **비전**: feature 후보군을 끊임없이 생성·테스트·검증·승격할 수 있는 **자동화된 ML 실험 플랫폼**.
 
-**현재 위치**: Phase 0 (단일 모델 + wide 테이블 구조)
-**다음 1년 목표**: Phase 5-7 (모델 다양화 + Promotion Gate + Spot 학습 분리)
+**현재 위치**: Phase 5 (P1–P5 완료 — 메타 테이블·long 마트·평가 함수 구축, 다중 모델 soft-voting 운영)
+**다음 1년 목표**: P6-P7 (Feature DSL 자동 백필 + Promotion Gate + Spot 학습 분리)
 
 ---
 
@@ -188,17 +188,48 @@ sort_key = (-volume_score, -prob, -auc, -trend_score)
 
 ---
 
+## 진행 현황 (P1–P5 완료, 2026-05-31)
+
+> 계획(D1-D8)과 실제 구현의 **편차**를 정직하게 기록한다. "왜 다르게 갔는가"가 이 문서의 핵심.
+
+### P1 — 데이터 품질 검증 ✅
+- `scripts/verify_data_quality.py` 구현 — 데이터 신선도/결측/모델 품질(`model_registry` 기반) 점검
+- TopK 평가 함수는 P1이 아니라 **P5의 `evaluate_predictions.py`로 통합** (중복 방지)
+
+### P2 — 메타 테이블 3종 ✅ (1건 미완)
+- `model_registry` · `evaluation_history` 생성 + `train_models.py`가 학습 시 자동 INSERT ✅
+- ⚠️ **`feature_catalog`는 테이블만 생성되고 INSERT 코드 없음 — 사실상 빈 테이블.** P6 Feature DSL의 전제이므로 그 전에 채워야 함.
+
+### P3 — long 예측/성과 마트 ✅ (설계 변경)
+- `universe_predictions` (long: date·ticker·model_type·label·prob) + `universe_outcomes` (long: hold_days·return_close·max_drawdown) 생성 ✅
+- ⚠️ **D1의 `universe_labels` long 테이블은 신설하지 않고 기존 `universe_daily.label_*` (wide) 재사용.** 라벨 추가 시 여전히 ALTER 필요 — long 전환 미완.
+- ⚠️ **`universe_predictions`에 D1이 명시한 `model_ver` 컬럼 없음** — 예측↔모델버전 추적 불가 (아래 P6/P7 검토 참조).
+
+### P4 — 모델 다양화 ✅ (계획과 다른 모델)
+- 계획: CatBoost 추가 → **실제: ET(ExtraTrees) 운영 복귀.** VM 4GB 증설로 RAM 확보, 라벨당 순차 로드 시 peak 1.1GB 확인.
+- 운영 추론 = **XGB + LGBM + ET 단순평균 soft-voting** (`agents/ml_scorer.py:_MODEL_TYPES`)
+- ET 복귀 효과: 일별 Prec@20 24.0%→24.8% (+0.8%p)
+- LR base/Stacking은 탐색했으나 AUC 낮아 **운영 미반영**. CatBoost는 미착수.
+
+### P5 — 실전 평가 지표 ✅
+- `scripts/evaluate_predictions.py` — Brier / Prec@10 / Prec@20 / Lift@20 per label
+- 결과 → `evaluation_history` (model_type='live_ensemble')
+- ⚠️ **평가 입력이 `signal_xgb_probs`(라이브 신호 ~12종목)** — 전종목 `universe_predictions`는 아직 평가 파이프라인에 미연결.
+- 데이터 제약: universe_daily 라벨은 10거래일 경과 후 채워짐 → 2026-05-15 예측은 6/2 이후 평가 가능.
+
+---
+
 ## Phase별 로드맵 요약
 
-| Phase | 기간 | 목표 | 의존성 | VM 요구 |
+| Phase | 상태 | 목표 | 의존성 | VM 요구 |
 |-------|------|------|--------|---------|
-| **P1** | 1-2일 | `verify_data_quality.py` + TopK 평가 함수 | 없음 | e2-medium |
-| **P2** | 2-3일 | `feature_catalog` + `model_registry` + `evaluation_history` | P1 | e2-medium |
-| **P3** | 3-5일 | `universe_predictions` + `universe_labels` (long) | P2 | e2-medium |
-| **P4** | 2-3일 | CatBoost 추가, long 마트에서 첫 학습·평가 | P3 | e2-medium |
-| **P5** | 2일 | TopK·Brier·Lift 등 evaluation_history 확장 | P3 | e2-medium |
-| **P6** | 1-2주 | Feature DSL (yaml → 자동 백필·shadow 등록) | P2-P5 | + Spot 학습 VM |
-| **P7** | 1주 | Promotion Gate (shadow→production 자동) | P6 | + Spot 학습 VM |
+| **P1** | ✅ 완료 | `verify_data_quality.py` (+TopK는 P5로) | 없음 | e2-medium |
+| **P2** | 🟡 부분 | `model_registry`·`evaluation_history` ✅ / `feature_catalog` 미채움 | P1 | e2-medium |
+| **P3** | 🟡 부분 | `universe_predictions`·`universe_outcomes` ✅ / `universe_labels` long·`model_ver` 미완 | P2 | e2-medium |
+| **P4** | ✅ 완료 | (CatBoost 대신) ET 복귀 — XGB+LGBM+ET soft-voting | P3 | e2-medium |
+| **P5** | ✅ 완료 | Brier·Prec@K·Lift 평가 + `evaluation_history` | P3 | e2-medium |
+| **P6** | ⬜ 예정 | Feature DSL (yaml → 자동 백필·shadow 등록) | P2-P5 | + Spot 학습 VM |
+| **P7** | ⬜ 예정 | Promotion Gate (shadow→production 자동) | P6 | + Spot 학습 VM |
 
 ---
 
@@ -218,3 +249,4 @@ sort_key = (-volume_score, -prob, -auc, -trend_score)
 | 날짜 | 변경 | 결정 ID |
 |------|------|---------|
 | 2026-05-30 | 초안 작성 — Phase 0→1 진입 전 큰 그림 정립 | D1-D8 |
+| 2026-05-31 | P1–P5 진행 현황 추가 (계획 대비 편차 명시) — feature_catalog 미채움 / universe_labels·model_ver 미완 / P4는 CatBoost 대신 ET | D1·D3 |

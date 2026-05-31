@@ -468,6 +468,12 @@ ALTER TABLE backtest_labels DROP COLUMN IF EXISTS label_first_up_10pct;
 ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_first_up_3pct;
 ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_first_up_5pct;
 ALTER TABLE universe_daily DROP COLUMN IF EXISTS label_first_up_10pct;
+
+-- P5.5: 모델 버전관리 + 예측 추적
+ALTER TABLE model_registry ADD COLUMN IF NOT EXISTS version          VARCHAR;
+ALTER TABLE model_registry ADD COLUMN IF NOT EXISTS feature_set_hash VARCHAR;
+ALTER TABLE model_registry ADD COLUMN IF NOT EXISTS n_features       INTEGER;
+ALTER TABLE universe_predictions ADD COLUMN IF NOT EXISTS model_ver  VARCHAR;
 """
 
 
@@ -549,15 +555,66 @@ _FEATURE_CATALOG_ROWS = [
 ]
 
 
+def _migrate_model_registry_versioning(conn) -> None:
+    """기존 model_registry 행: model_id에 @train_date 추가 + version 세팅 (1회 적용)."""
+    try:
+        conn.execute("""
+            UPDATE model_registry
+            SET version = CAST(train_date AS VARCHAR),
+                model_id = model_id || '@' || CAST(train_date AS VARCHAR)
+            WHERE version IS NULL AND train_date IS NOT NULL
+        """)
+    except Exception:
+        pass
+
+
 def _seed_feature_catalog(conn) -> None:
-    n = conn.execute("SELECT COUNT(*) FROM feature_catalog").fetchone()[0]
-    if n > 0:
-        return
     today = date.today().isoformat()
     conn.executemany(
         "INSERT OR IGNORE INTO feature_catalog (feature_name, section, used_in_train, added_date)"
         " VALUES (?, ?, ?, ?)",
         [(name, sec, used, today) for name, sec, used in _FEATURE_CATALOG_ROWS],
+    )
+
+
+def _upsert_model_registry(
+    conn,
+    label_key: str,
+    mtype: str,
+    fpath: str,
+    train_date: str,
+    auc: float | None,
+    prec10: float | None,
+    prec20: float | None,
+    ret20: float | None,
+    brier: float | None = None,
+    feat_hash: str | None = None,
+    n_feat: int | None = None,
+) -> None:
+    """model_registry + evaluation_history upsert (버전 포함).
+
+    같은 (label_key, model_type)의 기존 production → retired 전이 후 신규 production INSERT.
+    같은 train_date 재실행 시 INSERT OR REPLACE로 멱등.
+    """
+    model_id = f"{mtype}_{label_key}@{train_date}"
+    conn.execute(
+        "UPDATE model_registry SET status='retired'"
+        " WHERE label_key=? AND model_type=? AND status='production' AND model_id<>?",
+        [label_key, mtype, model_id],
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO model_registry"
+        " (model_id, label_key, model_type, file_path, train_date, status,"
+        "  oof_auc, prec_at_20, ret_at_20, version, feature_set_hash, n_features)"
+        " VALUES (?,?,?,?,?, 'production', ?,?,?,?,?,?)",
+        [model_id, label_key, mtype, fpath, train_date,
+         auc, prec20, ret20, train_date, feat_hash, n_feat],
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO evaluation_history"
+        " (eval_date, label_key, model_type, oof_auc, prec_at_10, prec_at_20, brier)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        [train_date, label_key, mtype, auc, prec10, prec20, brier],
     )
 
 
@@ -583,21 +640,16 @@ def register_models_from_json(
             for mtype, ext in ext_map.items():
                 if f"{mtype}_auc" not in row:
                     continue
-                model_id = f"{mtype}_{label_key}"
                 fpath = str(out_dir / f"{mtype}_label_{label_key}{ext}")
-                conn.execute(
-                    "INSERT OR REPLACE INTO model_registry"
-                    " (model_id, label_key, model_type, file_path, train_date, status, oof_auc, prec_at_20, ret_at_20)"
-                    " VALUES (?, ?, ?, ?, ?, 'production', ?, ?, ?)",
-                    [model_id, label_key, mtype, fpath, train_date,
-                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@20"), row.get(f"{mtype}_ret@20")],
-                )
-                conn.execute(
-                    "INSERT OR REPLACE INTO evaluation_history"
-                    " (eval_date, label_key, model_type, oof_auc, prec_at_10, prec_at_20, brier)"
-                    " VALUES (?, ?, ?, ?, ?, ?, NULL)",
-                    [train_date, label_key, mtype,
-                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@10"), row.get(f"{mtype}_prec@20")],
+                _upsert_model_registry(
+                    conn, label_key, mtype, fpath, train_date,
+                    auc=row.get(f"{mtype}_auc"),
+                    prec10=row.get(f"{mtype}_prec@10"),
+                    prec20=row.get(f"{mtype}_prec@20"),
+                    ret20=row.get(f"{mtype}_ret@20"),
+                    brier=row.get(f"{mtype}_brier"),
+                    feat_hash=None,
+                    n_feat=None,
                 )
         print(f"등록 완료: {len(summary)}라벨 × {len(ext_map)}모델")
     finally:
@@ -616,6 +668,7 @@ def init_db() -> None:
         conn.execute(_MIGRATIONS)
         _migrate_backtest_labels(conn)
         _migrate_xgb_to_ensemble(conn)
+        _migrate_model_registry_versioning(conn)
         _seed_feature_catalog(conn)
         # 기존 signal_history 레코드에 scoring_version 소급 설정
         # vol_score <= 6 은 일봉 근사 backfill, 초과는 60분봉 실시간 구버전

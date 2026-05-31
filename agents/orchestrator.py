@@ -796,6 +796,17 @@ def _update_universe_preds(date_str: str, probs_by_ticker: dict | None = None) -
         conn.close()
 
     # universe_predictions (long format) INSERT
+    conn_ver = get_conn(read_only=True)
+    try:
+        ver_row = conn_ver.execute(
+            "SELECT MAX(version) FROM model_registry WHERE status='production'"
+        ).fetchone()
+        cur_ver = ver_row[0] if ver_row else None
+    except Exception:
+        cur_ver = None
+    finally:
+        conn_ver.close()
+
     pred_rows = []
     for ticker, lp in probs_by_ticker.items():
         for lbl in _PRED_LABELS:
@@ -807,6 +818,7 @@ def _update_universe_preds(date_str: str, probs_by_ticker: dict | None = None) -
                     "model_type": "ensemble",
                     "label": lbl,
                     "prob": prob,
+                    "model_ver": cur_ver,
                 })
     if pred_rows:
         df_pred = pd.DataFrame(pred_rows)
@@ -815,8 +827,8 @@ def _update_universe_preds(date_str: str, probs_by_ticker: dict | None = None) -
             conn2.register("_pred_long", df_pred)
             conn2.execute("""
                 INSERT OR REPLACE INTO universe_predictions
-                    (date, ticker, model_type, label, prob)
-                SELECT date, ticker, model_type, label, prob
+                    (date, ticker, model_type, label, prob, model_ver)
+                SELECT date, ticker, model_type, label, prob, model_ver
                 FROM _pred_long
             """)
             logger.info("universe_predictions INSERT 완료: %d행", len(pred_rows))

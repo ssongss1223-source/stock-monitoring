@@ -18,6 +18,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from datetime import date as _date
 from pathlib import Path
@@ -84,6 +85,10 @@ _ET_PARAMS = dict(
 def _feature_cols(df: pd.DataFrame) -> list[str]:
     label_cols = {c for c in df.columns if c.startswith("label_")}
     return [c for c in df.columns if c not in _DROP and c not in label_cols]
+
+
+def _feat_hash(cols: list[str]) -> str:
+    return hashlib.sha1(",".join(sorted(cols)).encode()).hexdigest()[:12]
 
 
 def _spw(y_tr: pd.Series) -> float:
@@ -498,14 +503,16 @@ def main() -> None:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     print(f"상세 결과 저장: {result_path}")
 
-    _write_to_db(summary, _date.today().isoformat())
+    _write_to_db(summary, _date.today().isoformat(), fcols)
 
 
-def _write_to_db(summary: list[dict], train_date: str) -> None:
+def _write_to_db(summary: list[dict], train_date: str, feat_cols: list[str]) -> None:
     """훈련 결과 → model_registry + evaluation_history."""
-    from data.db import get_conn
+    from data.db import get_conn, _upsert_model_registry
     out_dir = Path("data/models")
     ext_map = {"xgb": ".json", "lgbm": ".txt", "et": ".pkl", "lr_base": ".pkl"}
+    fhash = _feat_hash(feat_cols)
+    n_feat = len(feat_cols)
     conn = get_conn()
     try:
         for row in summary:
@@ -513,22 +520,16 @@ def _write_to_db(summary: list[dict], train_date: str) -> None:
             for mtype, ext in ext_map.items():
                 if f"{mtype}_auc" not in row:
                     continue
-                model_id = f"{mtype}_{label_key}"
                 fpath = str(out_dir / f"{mtype}_label_{label_key}{ext}")
-                conn.execute(
-                    "INSERT OR REPLACE INTO model_registry"
-                    " (model_id, label_key, model_type, file_path, train_date, status, oof_auc, prec_at_20, ret_at_20)"
-                    " VALUES (?, ?, ?, ?, ?, 'production', ?, ?, ?)",
-                    [model_id, label_key, mtype, fpath, train_date,
-                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@20"), row.get(f"{mtype}_ret@20")],
-                )
-                conn.execute(
-                    "INSERT OR REPLACE INTO evaluation_history"
-                    " (eval_date, label_key, model_type, oof_auc, prec_at_10, prec_at_20, brier)"
-                    " VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    [train_date, label_key, mtype,
-                     row.get(f"{mtype}_auc"), row.get(f"{mtype}_prec@10"),
-                     row.get(f"{mtype}_prec@20"), row.get(f"{mtype}_brier")],
+                _upsert_model_registry(
+                    conn, label_key, mtype, fpath, train_date,
+                    auc=row.get(f"{mtype}_auc"),
+                    prec10=row.get(f"{mtype}_prec@10"),
+                    prec20=row.get(f"{mtype}_prec@20"),
+                    ret20=row.get(f"{mtype}_ret@20"),
+                    brier=row.get(f"{mtype}_brier"),
+                    feat_hash=fhash,
+                    n_feat=n_feat,
                 )
         print(f"DB 등록: model_registry + evaluation_history ({len(summary)}라벨)")
     except Exception as e:
