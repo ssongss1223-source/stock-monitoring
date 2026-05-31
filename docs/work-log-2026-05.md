@@ -2,6 +2,22 @@
 
 ---
 
+## 2026-05-31 세션 61 — P5.5 모델 버전관리 마이그레이션 설계·구현·배포
+- 작업: architecture-roadmap P1~P5 현황 업데이트 → 자동화 루프를 위한 갭 분석 → P5.5 마이그레이션 설계 → 구현 → VM 배포
+- 핵심 발견:
+  - model_registry: model_id에 버전 없어 재훈련 시 덮어씀 → D5 Promotion Gate 불가
+  - universe_predictions: model_ver 컬럼 없어 예측↔모델 추적 단절
+  - feature_catalog: 이미 시딩 중이었음 (직전 Grep false negative — 정정)
+- 변경 사항:
+  - `1819fda`: `data/db.py` — `_MIGRATIONS`에 컬럼 추가, `_upsert_model_registry` 헬퍼, `_migrate_model_registry_versioning`, `_seed_feature_catalog` early-return 제거, `register_models_from_json` 리팩터
+  - `1819fda`: `scripts/train_models.py` — `_feat_hash` + `_write_to_db`에 feat_hash/n_feat 전달
+  - `1819fda`: `agents/orchestrator.py` — universe_predictions INSERT에 model_ver 스탬프
+  - `1819fda`: `scripts/backfill_p3.py` — INSERT에 model_ver=NULL 추가
+  - `docs/architecture-roadmap.md` — P1~P5 진행현황 섹션 추가 (계획 대비 편차 명시)
+- 검증: VM init_db 적용 후 version IS NULL 0건, model_id `@2026-05-30` 형식, model_ver 컬럼 존재 확인
+- 관련 파일: `data/db.py`, `scripts/train_models.py`, `agents/orchestrator.py`, `scripts/backfill_p3.py`
+- 설계 문서: `.claude/plans/p5_5_model_versioning_migration.md`
+
 ## 2026-05-31 세션 60 — P4 재정의 + ET 운영 복귀
 - 작업: backfill 완료 확인 → P4 알고리즘 검토(데이터 기반) → ET 운영 복귀 배포
 - 핵심 발견:
