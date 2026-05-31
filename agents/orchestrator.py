@@ -144,6 +144,9 @@ class Orchestrator:
 
     async def run_collect(self) -> None:
         """장 마감 후 데이터 수집 (16:00 KST = 07:00 UTC)."""
+        if not _is_trading_day():
+            logger.info("오늘(%s)은 거래일이 아님 — 수집 건너뜀", date.today())
+            return
         import time
         logger.info("=== 데이터 수집 시작 ===")
         start = time.monotonic()
