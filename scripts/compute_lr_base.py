@@ -90,7 +90,14 @@ def main() -> None:
     X = df[fcols]
 
     oof_path = Path("data/oof_predictions.parquet")
-    oof_df = pd.read_parquet(oof_path) if oof_path.exists() else df[["signal_date", "ticker"]].copy()
+    # feature_matrix 기준으로 oof_df 생성 후 기존 OOF를 signal_date+ticker로 병합
+    oof_df = df[["signal_date", "ticker"]].copy()
+    if oof_path.exists():
+        old_oof = pd.read_parquet(oof_path)
+        old_oof["signal_date"] = pd.to_datetime(old_oof["signal_date"])
+        oof_cols_old = [c for c in old_oof.columns if c not in ("signal_date", "ticker")]
+        old_oof = old_oof[["signal_date", "ticker"] + oof_cols_old]
+        oof_df = oof_df.merge(old_oof, on=["signal_date", "ticker"], how="left")
 
     out_dir = Path("data/models")
     out_dir.mkdir(exist_ok=True)
