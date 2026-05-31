@@ -2,6 +2,35 @@
 
 ---
 
+## 2026-05-31 세션 63 — 추천 로직 재설계 (브레인스토밍 → 스펙 → 플랜)
+- 작업: 텔레그램 메시지 재설계 브레인스토밍 → 스펙 작성 → 구현 플랜 작성
+- 변경 사항:
+  - `docs/superpowers/specs/2026-05-31-recommendation-logic-redesign.md` 신규
+  - `docs/superpowers/plans/2026-05-31-recommendation-logic-redesign.md` 신규
+- 핵심 결정:
+  - 대형주 기준: KOSPI≤100위 or KOSDAQ≤50위 → **시총 ≥5조** (대형 119/중소형 232)
+  - 정렬: (-volume_score, -prob, -auc) → **필터게이트(vol≥7,trend≥6) + AUC가중 ML확률 순**
+  - 평가 K: 단일 20 → **[5, 10, 20, 30]** (5=버킷당, 10=전체추천근사, 20/30=벤치마크)
+  - 패턴분석 메시지 표시 제거는 **후속 태스크**로 분리
+  - ML-only 신호(score=0)는 게이트 항상 미달 → fallback 처리 (의도된 동작)
+- 발견:
+  - 거래량/추세가 이미 ML 피처에 풍부하게 포함 → 정렬키 재사용은 이중계산 모순
+  - 유니버스 351종목 = KOSPI200 + KOSDAQ151 (`kospi200_daq150` 모드)
+  - `BuySignal`에 `market_cap` 필드 없음 → orchestrator pykrx 동일 호출에서 추가 추출 필요
+- 다음: 서브에이전트로 플랜 Task 1~6 실행
+
+---
+
+## 2026-05-31 세션 62 — 환경 셋업 + 스킬 시스템 파악
+- 작업: 컨텍스트 로드 → yt-dlp/ffmpeg Windows 설치 → 유튜브 영상 분석 → superpowers 플러그인 체계 파악
+- 변경 사항: 코드 변경 없음
+- 메모:
+  - yt-dlp (`pip install --user`) + ffmpeg (`winget install Gyan.FFmpeg`) 로컬 설치 완료
+  - `/watch` 스킬로 주식 강의 영상(오전장 단타 검색기 만드는 방법) 분석 — 조건 14개 정리
+  - superpowers/understand-anything/agentmemory/watch 플러그인 용도 파악
+
+---
+
 ## 2026-05-31 세션 61 — P5.5 모델 버전관리 마이그레이션 설계·구현·배포
 - 작업: architecture-roadmap P1~P5 현황 업데이트 → 자동화 루프를 위한 갭 분석 → P5.5 마이그레이션 설계 → 구현 → VM 배포
 - 핵심 발견:
