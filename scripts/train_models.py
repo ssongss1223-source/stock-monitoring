@@ -37,6 +37,7 @@ except ImportError:
 
 from sklearn.ensemble import ExtraTreesClassifier
 from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
 import joblib
 
 _TARGETS = [
@@ -175,6 +176,25 @@ def _et_cv(X: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> tuple[list[float
     return fold_aucs, oof
 
 
+def _lr_base_cv(X: pd.DataFrame, y: pd.Series, n_splits: int = 5) -> tuple[list[float], np.ndarray]:
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    fold_aucs: list[float] = []
+    oof = np.full(len(X), np.nan)
+    for tr_idx, va_idx in tscv.split(X):
+        X_tr = X.iloc[tr_idx].fillna(0)
+        X_va = X.iloc[va_idx].fillna(0)
+        y_tr, y_va = y.iloc[tr_idx], y.iloc[va_idx]
+        scaler = StandardScaler()
+        X_tr_s = scaler.fit_transform(X_tr)
+        X_va_s = scaler.transform(X_va)
+        m = LogisticRegression(C=0.1, max_iter=1000, class_weight="balanced", random_state=42)
+        m.fit(X_tr_s, y_tr)
+        prob = m.predict_proba(X_va_s)[:, 1]
+        oof[va_idx] = prob
+        fold_aucs.append(roc_auc_score(y_va, prob))
+    return fold_aucs, oof
+
+
 # ── 최종 모델 학습 ────────────────────────────────────────────────────────────
 
 def _xgb_final(X: pd.DataFrame, y: pd.Series) -> xgb.XGBClassifier:
@@ -195,6 +215,15 @@ def _et_final(X: pd.DataFrame, y: pd.Series) -> ExtraTreesClassifier:
     m = ExtraTreesClassifier(**_ET_PARAMS)
     m.fit(X.fillna(0), y)
     return m
+
+
+def _lr_base_final(X: pd.DataFrame, y: pd.Series) -> tuple:
+    X_f = X.fillna(0)
+    scaler = StandardScaler()
+    X_s = scaler.fit_transform(X_f)
+    m = LogisticRegression(C=0.1, max_iter=1000, class_weight="balanced", random_state=42)
+    m.fit(X_s, y)
+    return m, scaler, list(X.columns)
 
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
@@ -238,7 +267,7 @@ def main() -> None:
         # ── 체크포인트 복구 ────────────────────────────────────────────────
         ckpt_oof = out_dir / f"oof_ckpt_{label_key}.parquet"
         ckpt_sum = out_dir / f"summary_ckpt_{label_key}.json"
-        if (out_dir / f"xgb_label_{label_key}.json").exists() and ckpt_oof.exists() and ckpt_sum.exists():
+        if (out_dir / f"xgb_label_{label_key}.json").exists() and ckpt_oof.exists() and ckpt_sum.exists() and (out_dir / f"lr_base_label_{label_key}.pkl").exists():
             print(f"  → 체크포인트 복구: {target} (건너뜀)")
             df_ckpt = pd.read_parquet(ckpt_oof)
             for col in df_ckpt.columns:
@@ -292,6 +321,26 @@ def main() -> None:
         oof_df[f"et_oof_{label_key}"] = et_oof
         row["et_auc"] = float(np.mean(et_fold_aucs))
         print(f"  ET    fold AUC: {np.mean(et_fold_aucs):.4f} ± {np.std(et_fold_aucs):.4f}")
+
+        # ── LR Base CV + OOF ─────────────────────────────────────────────
+        lr_base_fold_aucs, lr_base_oof = _lr_base_cv(X, y)
+        model_oofs["lr_base"] = lr_base_oof
+        oof_df[f"lr_base_oof_{label_key}"] = lr_base_oof
+        row["lr_base_auc"] = float(np.mean(lr_base_fold_aucs))
+        print(f"  LR_B  fold AUC: {np.mean(lr_base_fold_aucs):.4f} ± {np.std(lr_base_fold_aucs):.4f}")
+
+        # ── OOF 상관계수 (다양성 측정) ───────────────────────────────────
+        base_names_corr = ["xgb"] + (["lgbm"] if HAS_LGBM else []) + ["et", "lr_base"]
+        avail_corr = [n for n in base_names_corr if n in model_oofs]
+        if len(avail_corr) >= 2:
+            pairs = [(a, b) for i, a in enumerate(avail_corr) for b in avail_corr[i+1:]]
+            corr_parts = []
+            for a, b in pairs:
+                oa, ob = model_oofs[a], model_oofs[b]
+                valid = ~(np.isnan(oa) | np.isnan(ob))
+                r = np.corrcoef(oa[valid], ob[valid])[0, 1]
+                corr_parts.append(f"{a}↔{b}:{r:.3f}")
+            print(f"  OOF 상관: {' | '.join(corr_parts)}")
 
         # ── Ensemble OOF (OOF 기반 — 재학습 없음) ────────────────────────
         all_oofs = list(model_oofs.values())
@@ -377,6 +426,10 @@ def main() -> None:
         et_model = _et_final(X, y)
         joblib.dump((et_model, list(X.columns)), str(out_dir / f"et_label_{label_key}.pkl"))
 
+        lr_base_m, lr_base_scaler, lr_base_cols = _lr_base_final(X, y)
+        joblib.dump({"model": lr_base_m, "scaler": lr_base_scaler, "feat_cols": lr_base_cols},
+                    str(out_dir / f"lr_base_label_{label_key}.pkl"))
+
         if lr_model is not None:
             joblib.dump({"model": lr_model, "base_keys": base_oof_keys},
                         str(out_dir / f"lr_stacker_{label_key}.pkl"))
@@ -397,7 +450,7 @@ def main() -> None:
     print(f"{'='*62}")
     print("  요약 (walk-forward AUC / Precision@20 / Return@20)")
     print(f"{'='*62}")
-    model_names = ["xgb"] + (["lgbm"] if HAS_LGBM else []) + ["et"]
+    model_names = ["xgb"] + (["lgbm"] if HAS_LGBM else []) + ["et", "lr_base"]
     if len(model_names) >= 2:
         model_names += ["soft", "rank", "lr"]
 
@@ -441,7 +494,7 @@ def _write_to_db(summary: list[dict], train_date: str) -> None:
     """훈련 결과 → model_registry + evaluation_history."""
     from data.db import get_conn
     out_dir = Path("data/models")
-    ext_map = {"xgb": ".json", "lgbm": ".txt", "et": ".pkl"}
+    ext_map = {"xgb": ".json", "lgbm": ".txt", "et": ".pkl", "lr_base": ".pkl"}
     conn = get_conn()
     try:
         for row in summary:
