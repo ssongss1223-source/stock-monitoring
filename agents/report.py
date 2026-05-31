@@ -73,6 +73,36 @@ _SWING_LABELS = [
     "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
 ]
 
+_GATE_VOLUME_MIN = 7
+_GATE_TREND_MIN = 6
+
+
+def _passes_gate(s: BuySignal) -> bool:
+    """B등급 최소 기준(bull 기준)과 동일. ML-only(score=0)는 항상 미달."""
+    return s.volume_score >= _GATE_VOLUME_MIN and s.trend_score >= _GATE_TREND_MIN
+
+
+def _group_sort_key(item: tuple) -> tuple:
+    s, prob, label = item
+    auc = _LABEL_AUC.get(label, 0.5)
+    return (-prob * auc, -s.volume_score, -s.trend_score)
+
+
+def _pick_group(
+    bucket: dict[str, tuple],
+    used: set[str],
+    n: int = 3,
+) -> list[tuple]:
+    """버킷에서 n개 선택. 게이트 통과 우선, 미달 시 fallback으로 보충."""
+    available = [v for v in bucket.values() if v[0].ticker not in used]
+    gated = sorted([v for v in available if _passes_gate(v[0])], key=_group_sort_key)
+    top = gated[:n]
+    if len(top) < n:
+        picked = {s.ticker for s, _, _ in top}
+        ungated = [v for v in available if not _passes_gate(v[0]) and v[0].ticker not in picked]
+        top += sorted(ungated, key=_group_sort_key)[:n - len(top)]
+    return top
+
 
 class ReportAgent:
     """텔레그램 알림 발송 에이전트."""
@@ -277,32 +307,18 @@ def _four_groups(
             if cur is None or prob > cur[1]:
                 buckets[g_key][s.ticker] = (s, prob, label)
 
-    def sort_key(item: tuple):
-        s, prob, label = item
-        auc = _LABEL_AUC.get(label, 0.5)
-        return (-s.volume_score, -prob, -auc, -s.trend_score)
-
     # 그룹 선점 순서: 단기/대형 → 단기/중소형 → 스윙/대형 → 스윙/중소형
     used: set[str] = set()
-    large_short = sorted(buckets["ls"].values(), key=sort_key)[:3]
+    large_short = _pick_group(buckets["ls"], used)
     used |= {s.ticker for s, _, _ in large_short}
 
-    small_short = sorted(
-        [v for v in buckets["ss"].values() if v[0].ticker not in used],
-        key=sort_key,
-    )[:3]
+    small_short = _pick_group(buckets["ss"], used)
     used |= {s.ticker for s, _, _ in small_short}
 
-    large_swing = sorted(
-        [v for v in buckets["lw"].values() if v[0].ticker not in used],
-        key=sort_key,
-    )[:3]
+    large_swing = _pick_group(buckets["lw"], used)
     used |= {s.ticker for s, _, _ in large_swing}
 
-    small_swing = sorted(
-        [v for v in buckets["sw"].values() if v[0].ticker not in used],
-        key=sort_key,
-    )[:3]
+    small_swing = _pick_group(buckets["sw"], used)
 
     return large_short, large_swing, small_short, small_swing
 
