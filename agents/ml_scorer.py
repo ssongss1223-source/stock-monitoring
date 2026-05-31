@@ -1,6 +1,6 @@
 """멀티모델 추론 — BuySignal 목록에 ensemble_prob 인플레이스 업데이트 + 18개 라벨 동시 추론.
 
-XGB + LGBM soft voting 앙상블 사용 (ET 제외: VM RAM 부족). 모델 파일이 없으면 조용히 스킵.
+XGB + LGBM + ET soft voting 앙상블 사용. 모델 파일이 없으면 조용히 스킵.
 """
 from __future__ import annotations
 
@@ -26,8 +26,8 @@ _LABELS = [
     "first_10d_3pct", "first_10d_5pct", "first_10d_10pct",
 ]
 
-# (모델 접두사, 파일 확장자) — ET(.pkl) 제외: VM RAM 969MB < ET 모델 420MB×18
-_MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt")]
+# (모델 접두사, 파일 확장자) — ET 복귀: VM 4GB 증설 후 실측 peak RSS 1.1GB (라벨당 순차 로드)
+_MODEL_TYPES = [("xgb", ".json"), ("lgbm", ".txt"), ("et", ".pkl")]
 
 # feature_engineering._FEAT_TRAIN_COLS 와 동일한 순서 — universe_features_daily 컬럼
 _FEAT_COLS = [
