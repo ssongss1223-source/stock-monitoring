@@ -1,34 +1,26 @@
 # Checkpoint
 
 ## Current Goal
-- **추천 로직 재설계 구현** → 완료 후 6/2 배치 검증 + P5 평가 실행
+- **VM 배포 후 6/2 배치 검증 + P5 평가 실행**
 
 ## Current Status
-- **코드** `02a4c04` — 로컬만 (VM 미배포, 이번 변경은 추천 로직만 — 배포 필요)
+- **코드** `20f4ba5` — 로컬 완성 (VM 미배포, 배포 필요)
 - **서비스** active (2026-05-31 재시작, VM은 `1819fda` 기준)
-- **플랜 작성 완료** `docs/superpowers/plans/2026-05-31-recommendation-logic-redesign.md`
-  - Task 1~6 준비됨, 서브에이전트 실행 예정
+- **구현 완료**: Task 1~6 모두 완료, 전체 테스트 19/19 PASSED
 - **DB 데이터**
   - `universe_predictions` 최신: 2026-05-31 (6,318행/일)
   - `universe_outcomes` 최신: 2026-05-14 → 6/2 배치 후 5/15~ 라벨 자동 채움
   - `signal_xgb_probs`: 5/15~ 존재 → 6/2 이후 P5 평가 가능
 
 ## Done
+- `20f4ba5` 추천 로직 재설계 구현 완료 (대형주≥5조, 필터게이트, AUC가중 정렬, K=[5,10,20,30])
 - `02a4c04` 추천 로직 재설계 스펙+플랜 작성 (대형주 시총≥5조, 필터게이트, AUC가중 정렬, K=[5,10,20,30])
 - `1819fda` P5.5 모델 버전관리 마이그레이션 배포
 - `c41d580` `_auto_label_universe_unlabeled` 버그 수정 + `evaluate_predictions.py` 추가
 - `c89fbf9` ET 운영 복귀 — XGB+LGBM+ET soft voting (Prec@20 24.8%)
-- P3: `universe_predictions`·`universe_outcomes` long 마트 신설
 
 ## Remaining
-- **[진행중] 추천 로직 구현**: `docs/superpowers/plans/2026-05-31-recommendation-logic-redesign.md` Task 1~6
-  - Task 1: `BuySignal.market_cap` 필드 추가 (`models/signals.py`)
-  - Task 2: orchestrator market_cap 채우기 (`agents/orchestrator.py`)
-  - Task 3: `_is_large_cap()` 시총≥5조 (`agents/report.py`)
-  - Task 4: 필터게이트 + AUC가중 정렬 (`agents/report.py`)
-  - Task 5: 평가 K=[5,10,20,30] (`scripts/evaluate_predictions.py`)
-  - Task 6: 통합 검증 + checkpoint 업데이트
-- **구현 완료 후 VM 배포**: `sudo git pull` → 서비스 재시작
+- **[다음] VM 배포**: `sudo git reset --hard origin/main` → `sudo git pull` → 서비스 재시작
 - **6/2 배치 검증**: universe_predictions 신규일자 + model_ver 스탬프 + 텔레그램 수신 확인
 - **6/2 이후 P5 실행**: `sudo -u stock .venv/bin/python3 scripts/evaluate_predictions.py --top-k 5 10 20 30 [--save]`
 - **후속**: 메시지 포맷 정리(패턴분석 라인 제거), 정렬 가중치 AUC→라이브Prec@K 전환(데이터 누적 후)
@@ -60,4 +52,4 @@
 - **대형주 기준(변경 예정)**: 시총 ≥5조 → 대형 119 / 중소형 232
 
 ## Last Updated
-- 2026-05-31 17:05 KST
+- 2026-05-31 23:30 KST
