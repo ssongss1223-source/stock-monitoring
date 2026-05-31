@@ -3,13 +3,14 @@ P5 라이브 예측 평가 — signal_xgb_probs × universe_daily 라벨
 
 지표:
   Brier score   — 확률 보정 품질 (낮을수록 좋음)
-  Prec@10/20    — 확률 상위 K 종목 중 실제 양성 비율
-  Lift@20       — Prec@20 / 전체 양성 비율 (베이스라인 대비 배수)
+  Prec@K        — 확률 상위 K 종목 중 실제 양성 비율 (기본: K=[5,10,20,30])
+  Lift@K        — Prec@K / 전체 양성 비율 (베이스라인 대비 배수)
 
 Usage:
     sudo -u stock .venv/bin/python3 scripts/evaluate_predictions.py
     sudo -u stock .venv/bin/python3 scripts/evaluate_predictions.py --save
     sudo -u stock .venv/bin/python3 scripts/evaluate_predictions.py --from-date 2026-05-01
+    sudo -u stock .venv/bin/python3 scripts/evaluate_predictions.py --top-k 5 10 20
 """
 
 from __future__ import annotations
