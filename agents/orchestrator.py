@@ -899,10 +899,29 @@ def _insert_universe_features_daily() -> None:
     logger.info("universe_features_daily INSERT 완료: %s %d건", today_str, len(df_today))
 
 
-def _auto_label_universe_unlabeled(cutoff_days: int = 15) -> None:
-    """universe_daily 중 15일 이상 경과한 미라벨 행의 라벨을 자동 계산해 UPDATE."""
+def _auto_label_universe_unlabeled() -> None:
+    """universe_daily 중 10 거래일 이상 경과한 미라벨 행의 라벨을 자동 계산해 UPDATE.
+
+    달력일 기준 대신 거래일 기준 사용: ohlcv_daily 최근 11번째 거래일 = 10 거래일 전.
+    label_one()이 10 거래일 미래 데이터를 요구하므로 이 기준이 실제 최솟값.
+    """
     from backtest.labeler import label_one
-    cutoff = (date.today() - timedelta(days=cutoff_days)).isoformat()
+
+    # 10 거래일 전 날짜를 거래일 캘린더 기준으로 산출
+    conn_cut = get_conn(read_only=True)
+    try:
+        row_cut = conn_cut.execute("""
+            SELECT MIN(date) FROM (
+                SELECT DISTINCT date FROM ohlcv_daily
+                ORDER BY date DESC LIMIT 11
+            )
+        """).fetchone()
+    finally:
+        conn_cut.close()
+
+    if not row_cut or not row_cut[0]:
+        return
+    cutoff = str(row_cut[0])
 
     conn = get_conn(read_only=True)
     try:
