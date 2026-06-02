@@ -125,6 +125,11 @@ class ReportAgent:
         logger.info("ReportAgent: 수집 완료 알림 전송")
         return self._send_chunk(message)
 
+    async def send_verify_report(self, ok: int, warn: int, fail: int, lines: list[str]) -> bool:
+        message = _build_verify_message(ok, warn, fail, lines)
+        logger.info("ReportAgent: 데이터 품질 검증 알림 전송 (OK=%d WARN=%d FAIL=%d)", ok, warn, fail)
+        return self._send_chunk(message)
+
     async def send(
         self,
         markets: dict[str, MarketContext],
@@ -483,6 +488,20 @@ def _build_collect_message(
         f"⏱ 소요시간: {elapsed_str}",
     ]
     return "\n".join(lines)
+
+
+def _build_verify_message(ok: int, warn: int, fail: int, lines: list[str]) -> str:
+    from datetime import date
+    today = date.today().strftime("%Y-%m-%d")
+    icon = "❌" if fail > 0 else ("⚠️" if warn > 0 else "✅")
+    parts = [
+        f"🔍 <b>데이터 품질 검증 — {today}</b>",
+        f"{icon} OK {ok} / WARN {warn} / FAIL {fail}",
+    ]
+    problems = [l for l in lines if l.startswith("[WARN]") or l.startswith("[FAIL]")]
+    if problems:
+        parts.append("\n".join(f"  {l}" for l in problems))
+    return "\n".join(parts)
 
 
 def _split(text: str, limit: int) -> list[str]:

@@ -27,7 +27,7 @@ EXPECTED_UNIVERSE_SIZE = 351
 UNIVERSE_TOLERANCE = 20            # ±20종목 허용
 NULL_WARN_PCT = 5.0                # 피처 NULL 비율 5% 초과 시 경고
 NULL_FAIL_PCT = 30.0               # 30% 초과 시 실패
-LABEL_CUTOFF_DAYS = 15             # T+15 경과 행은 라벨 채워야 함
+LABEL_CUTOFF_DAYS = 15             # standalone 실행 시 달력일 fallback (run_checks는 거래일 기준 사용)
 # 임계치: bea26c8 fix 후 ~91% 채움 (나머지 ~9%는 label_one() None 반환 = 정상).
 # 자연 미채움 여유 두고 WARN 90%, FAIL 50%.
 LABEL_COVERAGE_WARN_PCT = 90.0
@@ -164,11 +164,26 @@ def check_null_rates(conn, result: Result) -> None:
 # Section 3 — 라벨 채움 진행
 # ────────────────────────────────────────────────────────────────
 
-def check_label_coverage(conn, result: Result) -> None:
-    """T+15 경과한 universe_daily 행에 라벨이 채워졌는지."""
+def _get_trading_day_cutoff(conn) -> str | None:
+    """ohlcv_daily 기준 10 거래일 전 날짜 반환 (라벨 가용 cutoff)."""
+    try:
+        row = conn.execute("""
+            SELECT MIN(date) FROM (
+                SELECT DISTINCT date FROM ohlcv_daily
+                ORDER BY date DESC LIMIT 11
+            )
+        """).fetchone()
+        return str(row[0]) if row and row[0] else None
+    except Exception:
+        return None
+
+
+def check_label_coverage(conn, result: Result, cutoff: str | None = None) -> None:
+    """10 거래일 이상 경과한 universe_daily 행에 라벨이 채워졌는지."""
     section = "label"
 
-    cutoff = (date.today() - timedelta(days=LABEL_CUTOFF_DAYS)).isoformat()
+    if cutoff is None:
+        cutoff = (date.today() - timedelta(days=LABEL_CUTOFF_DAYS)).isoformat()
 
     row = conn.execute(
         "SELECT COUNT(*) FROM universe_daily WHERE date <= CAST(? AS DATE) "
@@ -260,6 +275,21 @@ def check_model_quality(conn, result: Result, verbose: bool = False) -> None:
 
 
 # ────────────────────────────────────────────────────────────────
+# 프로그래매틱 호출용 (orchestrator에서 사용)
+# ────────────────────────────────────────────────────────────────
+
+def run_checks(conn) -> Result:
+    """모든 섹션을 실행하고 Result 반환 (출력 없음). orchestrator에서 호출."""
+    result = Result()
+    cutoff = _get_trading_day_cutoff(conn)
+    check_ingestion(conn, result)
+    check_null_rates(conn, result)
+    check_label_coverage(conn, result, cutoff=cutoff)
+    check_model_quality(conn, result)
+    return result
+
+
+# ────────────────────────────────────────────────────────────────
 # main
 # ────────────────────────────────────────────────────────────────
 
@@ -268,12 +298,13 @@ def main() -> int:
     parser.add_argument("--verbose", action="store_true", help="OK 항목도 모두 출력")
     args = parser.parse_args()
 
-    result = Result()
     conn = get_conn(read_only=True)
     try:
+        cutoff = _get_trading_day_cutoff(conn)
+        result = Result()
         check_ingestion(conn, result)
         check_null_rates(conn, result)
-        check_label_coverage(conn, result)
+        check_label_coverage(conn, result, cutoff=cutoff)
         check_model_quality(conn, result, verbose=args.verbose)
     finally:
         conn.close()

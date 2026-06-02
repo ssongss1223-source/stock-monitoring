@@ -204,6 +204,16 @@ class Orchestrator:
             index_ok=index_ok,
             elapsed_sec=elapsed,
         )
+        try:
+            from scripts.verify_data_quality import run_checks
+            conn_v = get_conn(read_only=True)
+            try:
+                vresult = run_checks(conn_v)
+            finally:
+                conn_v.close()
+            await self.report_agent.send_verify_report(vresult.ok, vresult.warn, vresult.fail, vresult.lines)
+        except Exception:
+            logger.exception("데이터 품질 검증 실패 — 파이프라인 계속")
 
     async def run_daily(self, force: bool = False) -> None:
         logger.info("=== 일일 분석 시작 ===")
