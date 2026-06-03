@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-06-03 세션 71 — SMA 백테스팅 MVP 전체 구현 + 실행 시작
+
+- 작업:
+  - subagent-driven-development로 Task 1~7 전부 구현 완료
+  - 텔레그램 "SMA 백테스트" 그룹 생성 + 봇 연결 + VM 환경변수 설정
+  - VM에서 백테스트 실행 시작 (screen sma_backtest)
+- 변경 사항:
+  - `b2072d3` `backtest/sma_config.py` — 23종목, 624 파라미터 조합
+  - `43b437a` `backtest/sma_signal.py` + 테스트 — sma_breakout/pullback 판별
+  - `24fb8f5` `backtest/sma_backtester.py` + 테스트 — 분할/일괄 진입, 손절/익절
+  - `48be286` `backtest/sma_optimizer.py` + 테스트 — Walk-forward + 인샘플 fallback
+  - `f873747` `data/db.py` — sma_backtest_results 테이블 VM 적용 (17컬럼)
+  - `ccc102d` `backtest/sma_reporter.py` — DuckDB 저장 + 텔레그램 리포트
+  - `3f5f234` `scripts/run_sma_backtest.py` — CLI 통합 실행
+  - `8e8151b` TELEGRAM_BOT_TOKEN 환경변수명 수정
+- 메모:
+  - 전체 테스트 37/37 PASS
+  - 텔레그램 Chat ID: -5119708094 ("SMA 백테스트" 그룹)
+  - VM .env에 TELEGRAM_BACKTEST_CHAT_ID 추가 완료
+  - 오늘 휴일로 DuckDB 락 없음 → 즉시 실행 가능했음
+  - SMA 21.0년 데이터 (삼성전자), Walk-forward=True 확인
+- 다음 아이디어:
+  - 텔레그램으로 결과 수신 후 Calmar 기준으로 전략 유효성 평가
+  - P5 평가: 6/6 이후 실행
+
+---
+
 ## 2026-06-03 세션 70 — SMA 백테스팅 설계 확정 + 구현 계획 완성
 
 - 작업:
