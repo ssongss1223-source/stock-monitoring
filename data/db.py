@@ -474,6 +474,29 @@ ALTER TABLE model_registry ADD COLUMN IF NOT EXISTS version          VARCHAR;
 ALTER TABLE model_registry ADD COLUMN IF NOT EXISTS feature_set_hash VARCHAR;
 ALTER TABLE model_registry ADD COLUMN IF NOT EXISTS n_features       INTEGER;
 ALTER TABLE universe_predictions ADD COLUMN IF NOT EXISTS model_ver  VARCHAR;
+
+-- SMA 백테스트 결과
+CREATE TABLE IF NOT EXISTS sma_backtest_results (
+    ticker          VARCHAR,
+    run_date        DATE,
+    sma_period      INTEGER,
+    confirm_days    INTEGER,
+    lookback_days   INTEGER,
+    drawdown_pct    DOUBLE,
+    is_walkforward  BOOLEAN,
+    window_start    DATE,
+    window_end      DATE,
+    calmar          DOUBLE,
+    cagr            DOUBLE,
+    mdd             DOUBLE,
+    win_rate        DOUBLE,
+    profit_factor   DOUBLE,
+    ev              DOUBLE,
+    total_trades    INTEGER,
+    vs_buyhold      DOUBLE,
+    PRIMARY KEY (ticker, run_date, sma_period, confirm_days,
+                 lookback_days, drawdown_pct, window_start)
+);
 """
 
 
