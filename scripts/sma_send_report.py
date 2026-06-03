@@ -2,11 +2,12 @@
 """DB에 저장된 SMA 백테스트 결과로 텔레그램 리포트 전송 (재전송용).
 
 Usage:
-    python scripts/sma_send_report.py [--date YYYY-MM-DD]
+    python scripts/sma_send_report.py [--date YYYY-MM-DD] [--tickers 005930 000660]
 """
 from __future__ import annotations
 import argparse
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -24,10 +25,16 @@ from backtest.sma_reporter import format_report, send_telegram
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--date", default=str(date.today()), help="결과 날짜 (기본: 오늘)")
+    parser.add_argument("--tickers", nargs="*", help="특정 종목만 전송")
+    parser.add_argument("--delay", type=float, default=1.5, help="메시지 간 딜레이(초)")
     args = parser.parse_args()
 
+    universe = UNIVERSE
+    if args.tickers:
+        universe = [u for u in UNIVERSE if u["ticker"] in args.tickers]
+
     ok, fail = 0, 0
-    for stock in UNIVERSE:
+    for stock in universe:
         ticker, name = stock["ticker"], stock["name"]
 
         conn = get_conn(read_only=True)
@@ -65,6 +72,8 @@ def main() -> None:
         else:
             fail += 1
             print(f"[{ticker}] {name} -> FAIL")
+
+        time.sleep(args.delay)
 
     print(f"\n완료: 성공 {ok} / 실패 {fail}")
 
