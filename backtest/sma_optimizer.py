@@ -89,4 +89,8 @@ def find_best_params(results: pd.DataFrame) -> dict | None:
     if avg.empty:
         return None
     best_row = avg.loc[avg["calmar"].idxmax()]
-    return best_row[param_cols].to_dict()
+    params = best_row[param_cols].to_dict()
+    params["sma_period"]    = int(params["sma_period"])
+    params["confirm_days"]  = int(params["confirm_days"])
+    params["lookback_days"] = int(params["lookback_days"])
+    return params
