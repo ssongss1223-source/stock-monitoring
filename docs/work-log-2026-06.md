@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-06-03 세션 72 — SMA 백테스트 완료 + 결과 분석
+
+- 작업:
+  - SMA 백테스트 23/23 완료 확인 (약 1시간 43분 소요)
+  - 버그 픽스: `find_best_params` pandas float→int 미캐스팅 → `rolling()` 오류
+  - 텔레그램 23종목 전 전송 성공 (rate limit 대응: `--delay` 옵션 추가)
+  - 분석: 눌림목 0건 확인, SMA별 안정성(CV) 분석, vs_buyhold 수치 원인 규명
+- 변경 사항:
+  - `7e4431b` `backtest/sma_optimizer.py`: `int()` 캐스팅 픽스
+  - `eb74c16` `scripts/sma_send_report.py`: DB 기반 재전송 스크립트
+  - `c5e1539` `scripts/sma_send_report.py`: `--tickers`, `--delay` 옵션 추가
+- 메모:
+  - **눌림목 진입 구조적으로 불가**: SMA 위로 올라오는 순간 breakout 진입 → 이후 pullback 발동 기회 없음. `lookback_days`/`drawdown_pct` 파라미터가 결과에 무영향인 이유.
+  - **vs_buyhold 과장**: 텔레그램 메시지의 수치는 20년 전체 복리 적용 → 수백조% 표시. 신뢰 지표는 DB의 `avg_calmar` (walk-forward).
+  - **최적 SMA 분포**: SMA50 6종목, SMA60 4종목, SMA80 3종목. 한국 주식은 50~80이 유효.
+  - **안정적 종목 (CV<2, avg_calmar>5)**: 삼성SDI(1.31/7.55), 기아(1.45/7.20), LS ELECTRIC(1.77/14.58)
+- 다음 아이디어:
+  - 눌림목 독립 전략: 피라미딩(기존 포지션에 추가매수) vs 쿨다운(재진입 허용) 방식 선택
+  - Fine-grid SMA: 최적값 ±10 구간에서 CV로 로버스트 구간 확인
+  - vs_buyhold 수치 → walk-forward avg_calmar/avg_cagr로 대체
+
+---
+
 ## 2026-06-03 세션 71 — SMA 백테스팅 MVP 전체 구현 + 실행 시작
 
 - 작업:
