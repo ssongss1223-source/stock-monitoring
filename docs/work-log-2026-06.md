@@ -2,6 +2,53 @@
 
 ---
 
+## 2026-06-03 세션 69 — SMA 백테스팅 플랫폼 설계 + 20년치 OHLCV 백필
+
+- 작업:
+  - TQQQ 200일선 매매법(아기티큐) 분석 및 한국 주식 적용 방향 설계
+  - 20년치 OHLCV 백필 스크립트 작성 및 실행 완료
+  - SMA+RSI 백테스팅 플랫폼 브레인스토밍 B안 확정
+- 변경 사항:
+  - `73d32cb` `scripts/backfill_historical_ohlcv.py` 신규 (yfinance, INSERT OR IGNORE)
+  - ohlcv_daily: 232,637행 → 1,540,635행 (+130만행, 2005~2026)
+- 메모:
+  - pykrx는 2015년 이전 데이터 지원 안 함 → yfinance(.KS/.KQ)로 해결
+  - 역사 데이터 없는 47종목 = 최근 상장 KOSDAQ 소형주 (정상)
+  - 4,685행/종목 = 일봉 맞음 (18.7년 × 252거래일 ≈ 4,712)
+  - SMA 플랫폼은 ML 파이프라인과 독립 운영 결정 (혼선 방지)
+  - 최적화 1순위: Calmar Ratio (CAGR÷MDD) — 손익비/부러질 위험 중심
+  - Sharpe는 상승 변동도 페널티 → SMA 비대칭 전략에 부적합
+- 다음 아이디어:
+  - 관심종목 20개 확정 (개인 10개 + 시총 상위 N개)
+  - writing-plans → SMA+RSI Walk-forward 백테스팅 구현
+  - 텔레그램 새 채널 + Streamlit 대시보드
+
+---
+
+## 2026-06-03 세션 68 — 텔레그램 검증 메시지 구현 + 신호 후행성 브레인스토밍
+
+- 작업:
+  - 텔레그램 데이터 품질 검증 메시지 구현 및 VM 배포 (`4d9e6ee`)
+  - 오늘(6/2) 데이터 전체 정상 확인 (351종목, OK 17 / WARN 11 / FAIL 0)
+  - 신호 후행성 문제 브레인스토밍 시작
+- 변경 사항:
+  - `scripts/verify_data_quality.py`: `run_checks()` 추가, `check_label_coverage` 거래일 cutoff 적용
+  - `agents/report.py`: `_build_verify_message`, `send_verify_report` 추가
+  - `agents/orchestrator.py`: `run_collect` 끝에 verify → 텔레그램 자동 발송
+- 메모:
+  - run_daily 6/2 정상: 62종목 신호, 351종목 ML 추론, universe_predictions 6318건
+  - 신호 후행성 근본 원인: 모든 피처가 모멘텀 추종 편향 (volume_surge, price_momentum 등)
+  - 삼성전기·LG이노텍: 10%+ 급등 후 추천 → 다음날 마이너스 — 전형적 후행 패턴
+  - ohlcv_daily 실제 범위: 2023-11-21 ~ 2026-06-02 (약 2.5년, 614거래일)
+  - 10년치 확장: FinanceDataReader로 가능 (pykrx 대비 빠름)
+- 다음 아이디어:
+  - 접근법 1: 최근 3일 내 +7% 이상 급등 종목 하드 필터 추가 (빠른 수술)
+  - 접근법 2: 눌림목 감지 레이어 (MA5>MA20>MA60 + 고점 대비 -4~12% + 거래량 감소)
+  - 접근법 3: 10년치 백필 + 종목별 지표 최적화 (장기 프로젝트)
+  - P5 평가: 6/6 이후 `--from-date 2026-05-22`
+
+---
+
 ## 2026-06-01 세션 67 — 전체 아키텍처 검증 + cutoff 버그 픽스
 
 - 작업: 재설계 후 첫 배치 전면 검증, 라벨 cutoff 버그 발견 및 픽스
