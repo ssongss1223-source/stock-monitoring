@@ -2,6 +2,28 @@
 
 ---
 
+## 2026-06-03 세션 70 — SMA 백테스팅 설계 확정 + 구현 계획 완성
+
+- 작업:
+  - 브레인스토밍 완료: 전략 로직 전체 확정, 23종목 선정
+  - 설계 문서 작성: `docs/superpowers/specs/2026-06-03-sma-backtest-design.md`
+  - 구현 계획 작성: `docs/superpowers/plans/2026-06-03-sma-backtest-core.md` (7개 태스크)
+- 변경 사항:
+  - `84ec20c` SMA 구현 계획 (Phase 1: 코어 + Telegram)
+  - `e9f9e3f` SMA 설계 문서 (최종 확정)
+- 메모:
+  - 두 가지 진입 방식 확정: SMA 최초 진입(3회 분할) + 눌림목 진입(1회 + -8% 손절)
+  - 익절: 아기티큐 방식 (+10/25/50%→10%, +100/200%→50%)
+  - 파라미터: SMA×confirm×lookback×drawdown = 624조합/종목
+  - run_daily/run_collect 영향도 없음 확인 (완전 분리)
+  - DuckDB 락 주의: 18:30 KST 이후 실행 권장
+  - Phase 2 (대시보드/API)는 별도 계획
+- 다음 아이디어:
+  - 새 세션에서 subagent-driven-development로 Task 1부터 순서대로 실행
+  - 텔레그램 새 채널 생성 + TELEGRAM_BACKTEST_CHAT_ID 환경변수 설정 선행 필요
+
+---
+
 ## 2026-06-03 세션 69 — SMA 백테스팅 플랫폼 설계 + 20년치 OHLCV 백필
 
 - 작업:
