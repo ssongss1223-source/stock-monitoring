@@ -137,7 +137,7 @@ def run_backtest(
                             pos.profit_levels_hit.add(threshold)
 
         # ── 포지션 없음 — 신규 진입 ─────────────────────────────────────
-        elif signal is not None and signal == signal:  # None/NaN 방지
+        elif pd.notna(signal):
             if signal == 'pullback':
                 pos = _Position(
                     entry_type='pullback',

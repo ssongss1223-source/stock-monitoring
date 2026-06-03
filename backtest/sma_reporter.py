@@ -33,7 +33,7 @@ def save_results(ticker: str, results: pd.DataFrame, run_date: date) -> None:
         if c not in df.columns:
             df[c] = None
 
-    conn = get_conn()
+    conn = get_conn(read_only=False)
     try:
         conn.register("_sma_res", df[cols])
         conn.execute("""
