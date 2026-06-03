@@ -43,9 +43,26 @@ def test_entry_signal_pullback():
     signals4 = get_entry_signals(close4, sma_period=3, lookback_days=3, drawdown_pct=15.0)
     assert signals4.iloc[4] == 'pullback'
 
-def test_pullback_priority_over_breakout():
-    # 동시에 sma_breakout + pullback 조건 → 'pullback' 우선
-    close = make_close([100, 100, 100, 50, 127])
-    signals = get_entry_signals(close, sma_period=3, lookback_days=3, drawdown_pct=0.5)
-    # 127 <= 127*(1-0.005)=126.4? No → only sma_breakout
+def test_breakout_takes_priority_on_crossover_day():
+    """SMA 돌파일에는 pullback 조건이 충족되더라도 breakout 반환."""
+    # idx4에서 SMA 돌파(breakout) + 낙폭 조건 동시 가능성 확인
+    # close = [100, 100, 100, 50, 85]
+    # SMA(3) at idx3 = (100+100+50)/3 = 83.3, close=50 < sma → no signal at idx3
+    # SMA(3) at idx4 = (100+50+85)/3 = 78.3, close=85 > sma ✓ → breakout at idx4
+    # rolling_high(3) at idx4 = max(100,50,85) = 100
+    # pullback 조건: 85 <= 100*(1-0.10)=90? → True (drawdown_pct=10)
+    # BUT: is_breakout=True at idx4 → is_pullback requires ~is_breakout → False
+    # 결과: sma_breakout (not pullback)
+    close = make_close([100.0, 100.0, 100.0, 50.0, 85.0])
+    signals = get_entry_signals(close, sma_period=3, lookback_days=3, drawdown_pct=10.0)
+    # idx4: breakout 발생, pullback 조건도 충족되지만 breakout이 우선
     assert signals.iloc[4] == 'sma_breakout'
+
+    # 반면 idx5(다음날)에는 pullback 가능 — breakout이 아니므로
+    close2 = make_close([100.0, 100.0, 100.0, 50.0, 85.0, 83.0])
+    signals2 = get_entry_signals(close2, sma_period=3, lookback_days=3, drawdown_pct=10.0)
+    # idx5: SMA(3)=(50+85+83)/3=72.7, close=83>sma ✓, NOT a breakout (was above sma at idx4)
+    # rolling_high(3) at idx5 = max(50,85,83) = 85
+    # 83 <= 85*(1-0.10)=76.5? → No → still no pullback
+    # idx5는 already-above-sma이고 pullback 조건 미충족 → None
+    assert signals2.iloc[5] is None or pd.isna(signals2.iloc[5])
