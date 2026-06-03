@@ -1,6 +1,11 @@
 {
-  "plansDirectory": ".claude/plans",
+  "env": {
+    "MAX_THINKING_TOKENS": "10000",
+    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
+  },
   "permissions": {
+    "defaultMode": "acceptEdits",
     "allow": [
       "Read",
       "mcp__stock-db__read_query",
@@ -13,6 +18,7 @@
       "mcp__telegram__send_message"
     ]
   },
+  "model": "sonnet",
   "hooks": {
     "Stop": [
       {
@@ -25,10 +31,11 @@
       }
     ]
   },
-  "model": "sonnet",
-  "env": {
-    "MAX_THINKING_TOKENS": "10000",
-    "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50",
-    "CLAUDE_CODE_SUBAGENT_MODEL": "haiku"
-  }
+  "enabledPlugins": {
+    "understand-anything@understand-anything": true,
+    "watch@claude-video": true,
+    "agentmemory@agentmemory": true,
+    "andrej-karpathy-skills@karpathy-skills": false
+  },
+  "plansDirectory": ".claude/plans"
 }
