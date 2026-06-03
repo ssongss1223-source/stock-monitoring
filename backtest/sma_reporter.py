@@ -11,7 +11,7 @@ from data.db import get_conn
 
 logger = logging.getLogger(__name__)
 
-_TELEGRAM_TOKEN   = os.getenv("TELEGRAM_TOKEN", "")
+_TELEGRAM_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "")
 _BACKTEST_CHAT_ID = os.getenv("TELEGRAM_BACKTEST_CHAT_ID", "")
 
 
