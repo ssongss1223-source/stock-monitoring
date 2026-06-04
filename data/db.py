@@ -497,6 +497,29 @@ CREATE TABLE IF NOT EXISTS sma_backtest_results (
     PRIMARY KEY (ticker, run_date, sma_period, confirm_days,
                  lookback_days, drawdown_pct, window_start)
 );
+
+-- SMA 백테스트 v2 (전략 확장형)
+CREATE TABLE IF NOT EXISTS sma_backtest_v2 (
+    run_id              VARCHAR,
+    ticker              VARCHAR,
+    run_date            DATE,
+    strategy            VARCHAR,
+    is_walkforward      BOOLEAN,
+    window_start        DATE,
+    window_end          DATE,
+    sma_period          INTEGER,
+    pullback_sma_delta  INTEGER,
+    stop_loss_pct       DOUBLE,
+    calmar              DOUBLE,
+    cagr                DOUBLE,
+    mdd                 DOUBLE,
+    win_rate            DOUBLE,
+    profit_factor       DOUBLE,
+    ev                  DOUBLE,
+    total_trades        INTEGER,
+    vs_buyhold          DOUBLE,
+    PRIMARY KEY (run_id, ticker, strategy, window_start)
+);
 """
 
 

@@ -70,3 +70,39 @@ def get_entry_signals(
     result[is_pullback] = 'pullback'
 
     return result
+
+
+def get_breakout_signals(close: pd.Series, sma_period: int) -> pd.Series:
+    """SMA breakout 시그널만 반환 (Boolean Series).
+
+    조건: 전날 종가 < SMA, 오늘 종가 >= SMA (첫 돌파).
+    """
+    sma = compute_sma(close, sma_period)
+    above = close >= sma
+    return above & ~above.shift(1).astype(bool).fillna(False)
+
+
+def get_pullback_signals(
+    close: pd.Series,
+    sma_period: int,
+    pullback_sma_delta: int,
+) -> pd.Series:
+    """Fast SMA 기반 눌림목 시그널 (Boolean Series).
+
+    조건:
+      - 오늘 종가 >= SMA_main    (메인 추세 유지)
+      - 오늘 종가 <= SMA_fast    (빠른 SMA 아래로 마감 — 눌림)
+      - 전날 종가 > SMA_fast     (어제까지는 fast SMA 위 — 첫 터치)
+
+    fast_period = sma_period - pullback_sma_delta
+    업트렌드에서 SMA(fast) > SMA(main) 이므로 가격이 두 SMA 사이 구간에 진입한 시점.
+    """
+    fast_period = sma_period - pullback_sma_delta
+    sma_main = compute_sma(close, sma_period)
+    sma_fast = compute_sma(close, fast_period)
+
+    above_main = close >= sma_main
+    at_or_below_fast = close <= sma_fast
+    prev_above_fast = (close > sma_fast).shift(1).astype(bool).fillna(False)
+
+    return above_main & at_or_below_fast & prev_above_fast

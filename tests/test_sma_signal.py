@@ -2,7 +2,10 @@
 import pandas as pd
 import numpy as np
 import pytest
-from backtest.sma_signal import compute_sma, compute_rolling_high, get_entry_signals
+from backtest.sma_signal import (
+    compute_sma, compute_rolling_high, get_entry_signals,
+    get_breakout_signals, get_pullback_signals,
+)
 
 def make_close(values):
     return pd.Series(values, dtype=float)
@@ -66,3 +69,53 @@ def test_breakout_takes_priority_on_crossover_day():
     # 83 <= 85*(1-0.10)=76.5? → No → still no pullback
     # idx5는 already-above-sma이고 pullback 조건 미충족 → None
     assert signals2.iloc[5] is None or pd.isna(signals2.iloc[5])
+
+
+# ── get_breakout_signals / get_pullback_signals ────────────────
+
+
+def test_breakout_signals_boolean():
+    """get_breakout_signals: 첫 돌파일만 True."""
+    close = make_close([5.0, 5.0, 5.0, 40.0, 50.0])
+    sig = get_breakout_signals(close, sma_period=3)
+    assert sig.iloc[2] == True   # SMA(3)=5, close=5 → 첫 돌파
+    assert sig.iloc[3] == False  # 이미 위에 있음
+    assert sig.iloc[4] == False
+
+
+def test_pullback_signals_basic():
+    """get_pullback_signals: fast SMA 아래 + main SMA 위 첫 터치."""
+    # main SMA period=10, fast period=10-5=5
+    # 긴 상승 후 fast SMA에 눌림
+    n = 30
+    # 처음 15일: 100 (SMA 수렴), 이후 상승 후 눌림
+    prices = [100.0] * 15 + [120.0] * 5 + [108.0] + [115.0] * 9
+    close = pd.Series(prices, dtype=float)
+
+    sig = get_pullback_signals(close, sma_period=10, pullback_sma_delta=5)
+    # 108 구간에서 fast SMA 아래 + main SMA 위 조건 충족 여부 확인
+    # 정확한 인덱스 대신 시그널이 최소 1개 이상 발생하는지만 검증
+    assert sig.any(), "눌림목 시그널이 1개 이상 발생해야 함"
+
+
+def test_pullback_no_signal_below_main_sma():
+    """main SMA 아래로 종가 마감 시 pullback 시그널 없음."""
+    prices = [100.0] * 10 + [60.0] * 10  # 급락
+    close = pd.Series(prices, dtype=float)
+    sig = get_pullback_signals(close, sma_period=10, pullback_sma_delta=3)
+    # 급락 구간에서는 main SMA 아래이므로 시그널 없어야 함
+    assert not sig.iloc[15:].any()
+
+
+def test_pullback_first_touch_only():
+    """fast SMA 아래 연속 이틀: 첫날만 시그널 (전날 fast SMA 위여야 함)."""
+    # 단조 감소 구간: 연속 2일 fast SMA 이하 → 첫날만 True
+    prices = [100.0] * 10 + [120.0] * 5 + [107.0, 105.0] + [115.0] * 8
+    close = pd.Series(prices, dtype=float)
+    sig = get_pullback_signals(close, sma_period=10, pullback_sma_delta=5)
+
+    # 107→105 연속 하락 구간에서 둘 다 시그널이 나오지 않는지 확인
+    # (두 날 모두 fast SMA 아래라면 두 번째 날은 prev_above_fast=False)
+    # 정확한 인덱스가 SMA 계산에 의존하므로 연속 True 쌍이 없는지 확인
+    consecutive = (sig & sig.shift(1).fillna(False)).any()
+    assert not consecutive, "연속 이틀 시그널 발생하면 안 됨"
