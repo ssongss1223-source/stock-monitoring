@@ -2,6 +2,27 @@
 
 ---
 
+## 2026-06-04 세션 73 — SMA 백테스터 재설계 브레인스토밍 + 설정 정비
+
+- 작업:
+  - 버그 영향 측정: 올바른 회계 엔진으로 재측정 → Calmar 10~18배 과대평가 확인
+  - 재설계 브레인스토밍 완료 → spec 작성·커밋 (사용자 검토 대기)
+  - 권한/autocompact 설정 정비
+- 변경 사항:
+  - `5b14441` `docs/superpowers/specs/2026-06-03-sma-backtest-redesign-design.md` 신규 (재설계 설계 문서)
+  - `c9d4d9d` `.claude/settings.json` — `permissions.defaultMode: acceptEdits` (파일 편집 자동 승인)
+- 관련 파일: 재작성 대상 `backtest/sma_backtester.py`(회계 버그), `sma_optimizer.py`(가짜 WF) / 재사용 `sma_signal.py`
+- 메모:
+  - 버그 #1(파셜셀 회계+MDD 미실현 미반영)이 핵심 — Calmar 1.8~8.6 → 실제 0.14~0.57
+  - 버그 #2(가짜 WF)는 최근 상승장에 가려져 실증 영향 작았음
+  - 설계 결정: 엔진부터 단계적 / All-in / SMA·눌림목 2계좌 분리 / 종합 50/50 / buy&hold 대비 Calmar 우위 / 접근법 A(Account 프리미티브)
+  - `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE: 50` = 컨텍스트 50%에서 자동 압축 (기본 83%보다 일찍·자주). 직접 compact 누를 일 없어진 이유. 83 위로는 못 올림(클램프). 권장 75.
+- 다음 아이디어:
+  - spec 검토 → writing-plans 스킬로 Phase 1 구현 플랜 작성
+  - Phase 1: Account 프리미티브 단위 테스트부터 (TDD, 버그 #1 회귀 방지)
+
+---
+
 ## 2026-06-03 세션 72 — SMA 백테스트 완료 + 결과 분석
 
 - 작업:

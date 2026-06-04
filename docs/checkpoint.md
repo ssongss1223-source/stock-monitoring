@@ -52,4 +52,4 @@
 - 코드 구조: 접근법 A (Account 프리미티브 + 전략 분리)
 
 ## Last Updated
-- 2026-06-03 22:40 KST
+- 2026-06-04 (세션 73 — 권한 모드 acceptEdits 설정, autocompact 50% 확인)
