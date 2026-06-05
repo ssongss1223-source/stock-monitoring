@@ -147,9 +147,67 @@ def phase_p3(conn) -> None:
     print(f"  판정: {'PASS — 무튜닝 전이 성공' if survive/len(rows) >= 0.6 else 'FAIL — 추가 분석 필요'}")
 
 
+def phase_p4(conn) -> None:
+    """Layer1 regime gate 효과 검증 — KOSPI gate ON일 때만 개별주 신호 허용.
+
+    P3(gate 없음) vs P4(KOSPI gate 적용) 생존율 비교.
+    """
+    from backtest.sma_config import UNIVERSE
+    kospi = load_index("1001", conn)
+    if kospi is None:
+        print("KOSPI 데이터 없음 — P0 먼저 실행하세요")
+        return
+
+    print(f"\n{'#'*55}")
+    print(f"# P4 Layer1 regime gate (KOSPI 200d) + 무튜닝 전이")
+    print(f"# P3 vs P4 생존율(Calmar>=0.2) 비교")
+    print(f"{'#'*55}")
+
+    rows = []
+    for u in UNIVERSE:
+        ticker = u["ticker"]
+        name   = u["name"]
+        df = conn.execute(
+            "SELECT date, open, high, low, close FROM ohlcv_daily "
+            "WHERE ticker = ? ORDER BY date", [ticker],
+        ).df()
+        if df.empty or len(df) < 300:
+            continue
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        m_no_gate = run_single(df)
+        m_with_gate = run_single(df, market_ohlcv=kospi)
+        rows.append({
+            "ticker": ticker, "name": name,
+            "calmar_p3": m_no_gate["calmar"],
+            "calmar_p4": m_with_gate["calmar"],
+            "cagr_p4":   m_with_gate["cagr"],
+            "mdd_p4":    m_with_gate["mdd"],
+            "trades_p4": m_with_gate["total_trades"],
+        })
+
+    rows.sort(key=lambda x: x["calmar_p4"], reverse=True)
+    print(f"\n  {'종목':<18} {'P3':>7} {'P4':>7} {'변화':>7} {'CAGR':>7} {'MDD':>7} {'거래':>5}")
+    print("  " + "-"*62)
+    for r in rows:
+        delta = r["calmar_p4"] - r["calmar_p3"]
+        flag = "✓" if r["calmar_p4"] >= 0.2 else "✗"
+        arrow = "↑" if delta > 0.02 else ("↓" if delta < -0.02 else "→")
+        print(f"  {flag} {r['name']:<16} {r['calmar_p3']:>7.3f} {r['calmar_p4']:>7.3f} "
+              f"{arrow}{delta:>+6.3f} {r['cagr_p4']:>6.1f}% "
+              f"{r['mdd_p4']:>6.1f}% {r['trades_p4']:>5}")
+
+    survive_p3 = sum(1 for r in rows if r["calmar_p3"] >= 0.2)
+    survive_p4 = sum(1 for r in rows if r["calmar_p4"] >= 0.2)
+    n = len(rows)
+    print(f"\n  P3 생존율: {survive_p3}/{n} = {survive_p3/n:.1%}")
+    print(f"  P4 생존율: {survive_p4}/{n} = {survive_p4/n:.1%}  "
+          f"({'개선' if survive_p4 > survive_p3 else '악화' if survive_p4 < survive_p3 else '동일'})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=["p1", "p2", "p3", "all"], default="p1")
+    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "all"], default="p1")
     args = parser.parse_args()
 
     conn = get_conn(read_only=True)
@@ -160,6 +218,8 @@ def main() -> None:
             phase_p2(conn)
         if args.phase in ("p3", "all"):
             phase_p3(conn)
+        if args.phase in ("p4", "all"):
+            phase_p4(conn)
     finally:
         conn.close()
 

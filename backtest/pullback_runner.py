@@ -19,17 +19,24 @@ def run_single(
     slope_lookback: int = 20,
     commission: float = _COMMISSION,
     return_equity: bool = False,
+    market_ohlcv: pd.DataFrame | None = None,
 ) -> dict:
     """단일 파라미터 백테스트.
 
     Args:
         ohlcv: DataFrame (index=DatetimeIndex, columns: close, high, low)
         return_equity: True면 결과에 equity_curve 포함
+        market_ohlcv: 코스피 등 시장 지수 OHLCV. 제공 시 Layer1 regime gate 적용.
 
     Returns:
         compute_metrics 결과 dict + params + (선택적) equity_curve
     """
-    sig = compute_signals(ohlcv, trend_period, entry_period, band_pct, slope_lookback)
+    market_gate = None
+    if market_ohlcv is not None:
+        from backtest.pullback_signal import regime_gate as _regime_gate
+        market_gate = _regime_gate(market_ohlcv["close"], trend_period, slope_lookback)
+    sig = compute_signals(ohlcv, trend_period, entry_period, band_pct, slope_lookback,
+                          market_gate=market_gate)
     close = ohlcv["close"]
     high  = ohlcv["high"]
     low   = ohlcv["low"]
