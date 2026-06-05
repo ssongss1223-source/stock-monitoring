@@ -2,7 +2,6 @@
 """market_index에 코스피(1001)/코스닥(2001) 20년치 백필."""
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -44,7 +43,7 @@ def backfill(conn) -> None:
         df = fetch_index(ticker)
         df = df.reset_index()  # date 컬럼으로
         conn.register("_idx_rows", df)
-        conn.execute("""
+        result = conn.execute("""
             INSERT OR REPLACE INTO market_index
                 (ticker, date, open, high, low, close, volume, amount, market_cap)
             SELECT ticker, CAST(date AS DATE), open, high, low, close,
