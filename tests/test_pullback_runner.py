@@ -1,6 +1,5 @@
 # tests/test_pullback_runner.py
 import pandas as pd
-import numpy as np
 import pytest
 from backtest.pullback_runner import run_single, sweep_params, split_periods
 
