@@ -2,6 +2,33 @@
 
 ---
 
+## 2026-06-06 세션 76 — 트랙 A 눌림목 타이밍 엔진 P0~P3 완료
+
+- 작업:
+  - 트랙 A/B 방향 브레인스토밍 완료: 트랙 A = 시계열 타이밍(WHEN), 트랙 B = 단면 ML 랭킹(WHICH) — 직교 설계
+  - KOSPI/KOSDAQ 지수 20년치 백필 (`market_index`, 5285행×2)
+  - 신호 함수 TDD 구현 (`pullback_signal.py`) + 러너 (`pullback_runner.py`) — 14 테스트 통과
+  - P1~P3 검증 완료 via `run_pullback_backtest.py`
+  - Subagent-Driven Development로 전체 구현 (8 tasks)
+- 변경 사항:
+  - 브랜치 `track-a-pullback-timing` 신규 생성
+  - `backtest/pullback_signal.py` — regime_gate/pullback_entry/exit_signal/compute_signals
+  - `backtest/pullback_runner.py` — run_single/sweep_params/split_periods
+  - `scripts/backfill_index_ohlcv.py` — pykrx 지수 백필
+  - `scripts/run_pullback_backtest.py` — P1~P3 CLI
+  - `docs/superpowers/specs/2026-06-05-pullback-timing-engine-design.md` — design spec
+  - `docs/superpowers/plans/2026-06-06-pullback-timing-engine.md` — 구현 계획
+- 관련 파일: `backtest/pullback_signal.py`, `backtest/pullback_runner.py`, `scripts/run_pullback_backtest.py`
+- P1~P3 결과:
+  - KOSPI: Calmar 0.376 (베이스라인 0.066 대비 5.7배), 165/165 파라미터 조합 양수 (100% robust)
+  - KOSDAQ: 부적합 (MaxDD -48%, 5년 구간 1/5 양수)
+  - P3 무튜닝 전이: 15/23 생존 (65.2%) — PASS. FAIL 종목은 박스권/평균회귀형
+- 다음 아이디어:
+  - Layer1 regime gate 추가 (KOSPI 200d 추세 ON일 때만 개별주 진입) → 박스권 손실 차단
+  - ML Prec@K 평가 (트랙 B 병행)
+
+---
+
 ## 2026-06-04 세션 73 — SMA 백테스터 재설계 브레인스토밍 + 설정 정비
 
 - 작업:

@@ -8,20 +8,12 @@
 - **트랙 B ML 파이프라인**: 정상 운영 중
 - **브랜치**: `track-a-pullback-timing` (main 미병합, 독립 개발 중)
 
-## Done (트랙 A — 세션 76)
-- 지수 20년치 백필 (`market_index`: 1001/2001, 2005~2026, 5285행)
-- 신호 함수 TDD 구현 (`backtest/pullback_signal.py`) — 14 테스트 통과
-- 백테스트 러너 (`backtest/pullback_runner.py`) — run_single/sweep_params/split_periods
-- 실행 스크립트 (`scripts/run_pullback_backtest.py`) — P1~P3 CLI
-- P1: KOSPI Calmar 0.376 (베이스라인 0.066 대비 5.7배), KOSDAQ 0.026 (부적합)
-- P2 robustness: KOSPI 165/165 조합 Calmar > 0 (100%) — 파라미터 robust ✅. 5년 구간 2/5 양수 (추세 국면 의존)
-- P3 무튜닝 전이: 생존율 65.2% (15/23) — PASS ✅. 추세주(SK스퀘어, HD현대일렉, 두산로보틱스) GOOD, 박스권주 FAIL
-
-## P2/P3 핵심 인사이트
-- KOSPI 전략은 **추세 있는 국면에서만** 작동 (2010-2015, 2020-2025 박스권 구간 부진)
-- KOSDAQ 구조적으로 부적합 (MaxDD -48%, 5년 구간 1/5만 양수)
-- 개별주 FAIL 패턴: 현대차·기아·셀트리온·삼성바이오 — 박스권/평균회귀형. MaxDD 50~85%
-- **시사점**: Layer1 Market Regime gate 추가 시 박스권 구간 손실 차단 가능 → 트랙 B Layer1 결합 명분
+## Done
+- 지수 20년치 백필 + 신호함수/러너 TDD 구현 (14 테스트) + P1~P3 CLI 스크립트
+- P1: KOSPI Calmar 0.376 vs 베이스라인 0.066 — 눌림 로직 유효 확인
+- P2: 165/165 파라미터 조합 Calmar > 0 (100% robust). 5년 구간 2/5 양수 — 추세 국면 의존
+- P3 무튜닝 전이 PASS (65.2%). 추세주(SK스퀘어·HD현대일렉) GOOD, 박스권주(현대차·셀트리온) FAIL
+- 인사이트: KOSDAQ 부적합. Layer1 regime gate 추가 시 박스권 손실 차단 가능 → Layer1 결합 명분
 
 ## Remaining — 트랙 A 다음 단계
 - **Layer1 regime gate 추가** — 시장 전체 추세 ON일 때만 개별주 신호 활성화 (박스권 방어)
