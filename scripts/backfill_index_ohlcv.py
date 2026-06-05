@@ -2,14 +2,21 @@
 """market_index에 코스피(1001)/코스닥(2001) 20년치 백필."""
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 import pandas as pd
+from dotenv import load_dotenv
 from pykrx import stock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from data.db import get_conn, init_db
+
+# Load .env file
+env_path = Path(__file__).parent.parent / ".env"
+if env_path.exists():
+    load_dotenv(env_path)
 
 INDICES = {"1001": "KOSPI", "2001": "KOSDAQ"}
 START = "20050103"
