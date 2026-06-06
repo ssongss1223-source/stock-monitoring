@@ -20,6 +20,7 @@ def run_single(
     commission: float = _COMMISSION,
     return_equity: bool = False,
     market_ohlcv: pd.DataFrame | None = None,
+    entry_mask: pd.Series | None = None,
 ) -> dict:
     """단일 파라미터 백테스트.
 
@@ -27,6 +28,7 @@ def run_single(
         ohlcv: DataFrame (index=DatetimeIndex, columns: close, high, low)
         return_equity: True면 결과에 equity_curve 포함
         market_ohlcv: 코스피 등 시장 지수 OHLCV. 제공 시 Layer1 regime gate 적용.
+        entry_mask: 외부 entry 신호 Series. 제공 시 내부 계산한 entry 대신 사용.
 
     Returns:
         compute_metrics 결과 dict + params + (선택적) equity_curve
@@ -37,6 +39,10 @@ def run_single(
         market_gate = _regime_gate(market_ohlcv["close"], trend_period, slope_lookback)
     sig = compute_signals(ohlcv, trend_period, entry_period, band_pct, slope_lookback,
                           market_gate=market_gate)
+    entry_sig = (
+        entry_mask.reindex(ohlcv.index, fill_value=False)
+        if entry_mask is not None else sig["entry"]
+    )
     close = ohlcv["close"]
     high  = ohlcv["high"]
     low   = ohlcv["low"]
@@ -57,7 +63,7 @@ def run_single(
             acc.sell(dt, mid, fraction_of_holdings=1.0, reason="trend_break")
             in_pos = False
 
-        if not in_pos and sig["entry"].iloc[i]:
+        if not in_pos and entry_sig.iloc[i]:
             acc.buy(dt, mid, fraction_of_cash=1.0)
             in_pos = True
 
