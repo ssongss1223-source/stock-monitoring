@@ -205,9 +205,69 @@ def phase_p4(conn) -> None:
           f"({'개선' if survive_p4 > survive_p3 else '악화' if survive_p4 < survive_p3 else '동일'})")
 
 
+TRADE_FILTER = 40  # Layer2 거래수 임계값
+
+
+def phase_p5(conn) -> None:
+    """Layer2 거래수 필터(< TRADE_FILTER) — 추세주 사전 스크리닝 효과 검증.
+
+    P3 결과에 trades < 40 필터 적용 → 생존율 재계산.
+    가설: 13/16 = 81%
+    """
+    from backtest.sma_config import UNIVERSE
+
+    print(f"\n{'#'*55}")
+    print(f"# P5 Layer2 거래수 필터 (trades < {TRADE_FILTER})")
+    print(f"# 가설: 필터 후 생존율 81% (13/16)")
+    print(f"{'#'*55}")
+
+    rows = []
+    for u in UNIVERSE:
+        ticker = u["ticker"]
+        name   = u["name"]
+        df = conn.execute(
+            "SELECT date, open, high, low, close FROM ohlcv_daily "
+            "WHERE ticker = ? ORDER BY date", [ticker],
+        ).df()
+        if df.empty or len(df) < 300:
+            continue
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        m = run_single(df)
+        rows.append({"ticker": ticker, "name": name, **m})
+
+    rows.sort(key=lambda x: x["calmar"], reverse=True)
+
+    passed   = [r for r in rows if r["total_trades"] <  TRADE_FILTER]
+    excluded = [r for r in rows if r["total_trades"] >= TRADE_FILTER]
+
+    print(f"\n  [필터 제외] trades >= {TRADE_FILTER} ({len(excluded)}종목)")
+    for r in excluded:
+        flag = "✓" if r["calmar"] >= 0.2 else "✗"
+        print(f"    {flag} {r['name']:<16} calmar={r['calmar']:.3f}  trades={r['total_trades']}")
+
+    print(f"\n  [필터 통과] trades < {TRADE_FILTER} ({len(passed)}종목)")
+    print(f"  {'종목':<18} {'Calmar':>7} {'CAGR':>7} {'MDD':>7} {'거래':>5}")
+    print("  " + "-"*48)
+    for r in passed:
+        flag = "✓" if r["calmar"] >= 0.2 else "✗"
+        print(f"  {flag} {r['name']:<16} {r['calmar']:>7.3f} "
+              f"{r['cagr']:>6.1f}% {r['mdd']:>6.1f}% {r['total_trades']:>5}")
+
+    survive   = sum(1 for r in passed if r["calmar"] >= 0.2)
+    n         = len(passed)
+    p3_survive = sum(1 for r in rows if r["calmar"] >= 0.2)
+    total      = len(rows)
+
+    print(f"\n  P3 (필터없음): {p3_survive}/{total} = {p3_survive/total:.1%}")
+    print(f"  P5 (필터후):   {survive}/{n} = {survive/n:.1%}  (가설: 13/16=81%)")
+    verdict = "PASS — 생존율 향상" if survive / n > p3_survive / total else "FAIL — 개선 없음"
+    print(f"  판정: {verdict}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "all"], default="p1")
+    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "p5", "all"], default="p1")
     args = parser.parse_args()
 
     conn = get_conn(read_only=True)
@@ -220,6 +280,8 @@ def main() -> None:
             phase_p3(conn)
         if args.phase in ("p4", "all"):
             phase_p4(conn)
+        if args.phase in ("p5", "all"):
+            phase_p5(conn)
     finally:
         conn.close()
 
