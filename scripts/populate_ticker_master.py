@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """ticker_master 채우기 — KOSPI/KOSDAQ 구분 + 시총 + 종목명.
 
-VM에서 실행:
-  sudo -u stock .venv/bin/python3 scripts/populate_ticker_master.py
+VM에서 실행 (.env의 KRX_ID/KRX_PW 필요):
+  cd /opt/stock-monitor
+  export $(grep -v '^#' .env | xargs) && sudo -u stock env KRX_ID="$KRX_ID" KRX_PW="$KRX_PW" .venv/bin/python3 scripts/populate_ticker_master.py
 
 출력:
   KOSPI/KOSDAQ별 종목수, 시총 상위 10
