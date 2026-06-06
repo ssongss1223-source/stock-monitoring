@@ -1,5 +1,6 @@
 """VM SSH MCP server — IAP TCP 터널 + paramiko (persistent connection)."""
 import asyncio
+import re
 import socket
 import subprocess
 import threading
@@ -129,9 +130,17 @@ def _get_client() -> paramiko.SSHClient:
     return _client
 
 
+def _has_redirect(cmd: str) -> bool:
+    """쉘 출력 리다이렉트 감지. 따옴표 안의 > 는 Python 비교연산자이므로 제외."""
+    stripped = re.sub(r'"[^"]*"', '""', cmd)
+    stripped = re.sub(r"'[^']*'", "''", stripped)
+    return " > " in stripped or " >> " in stripped
+
+
 def _ssh_run(command: str, timeout: int = 60) -> str:
-    # 리다이렉트(> file)가 있으면 paramiko가 출력을 읽지 못함 → 사용 금지
-    if " > " in command or " >> " in command:
+    # 쉘 레벨 리다이렉트(> file)가 있으면 paramiko가 출력을 읽지 못함 → 사용 금지
+    # 따옴표 안의 > (Python 비교연산자)는 허용
+    if _has_redirect(command):
         return (
             "ERROR: ssh_run에 출력 리다이렉트(> / >>)를 쓰면 paramiko가 출력을 읽지 못합니다. "
             "리다이렉트 없이 명령을 실행하세요. 백그라운드 실행이 필요하면 screen -dm을 사용하세요."
