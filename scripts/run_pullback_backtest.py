@@ -31,7 +31,7 @@ SWEEP_GRID = [
 
 # P5 rolling window 파라미터
 ROLLING_LOOKBACK = 500    # trailing 영업일 ≈ 2년
-ROLLING_THRESHOLD = 8     # 이 미만이면 추세 구간 신호로 허용
+ROLLING_THRESHOLD = 20    # 이 미만이면 추세 구간 신호로 허용
 
 
 def load_universe(conn, min_days: int = 5000) -> list[dict]:
