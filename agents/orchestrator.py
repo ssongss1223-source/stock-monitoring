@@ -796,18 +796,20 @@ def _update_universe_preds(date_str: str, probs_by_ticker: dict | None = None) -
 
     df = pd.DataFrame(rows)
     pred_cols = [f"pred_{l}" for l in _PRED_LABELS]
-    set_clause = ", ".join(f"{col} = s.{col}" for col in pred_cols)
-
+    # DuckDB: UPDATE SET 절에 qualified 컬럼명(s.col) 불가 → correlated subquery 사용
+    set_parts = [
+        f"{col} = (SELECT s.{col} FROM _preds s WHERE s.ticker = universe_daily.ticker)"
+        for col in pred_cols
+    ]
     conn = get_conn()
     try:
         conn.register("_preds", df)
-        conn.execute(f"""
-            UPDATE universe_daily ud
-            SET {set_clause}
-            FROM _preds s
-            WHERE ud.date = CAST('{date_str}' AS DATE)
-              AND ud.ticker = s.ticker
-        """)
+        conn.execute("""
+            UPDATE universe_daily
+            SET {}
+            WHERE universe_daily.date = CAST('{}' AS DATE)
+              AND EXISTS (SELECT 1 FROM _preds s WHERE s.ticker = universe_daily.ticker)
+        """.format(",\n            ".join(set_parts), date_str))
         logger.info("universe_daily ML 예측 UPDATE 완료: %d종목", len(rows))
     except Exception:
         logger.exception("universe_daily ML 예측 UPDATE 실패")
@@ -982,17 +984,24 @@ def _auto_label_universe_unlabeled() -> None:
         return
 
     df_labels = pd.DataFrame(labeled_rows)
-    set_clause = ", ".join(f"{col} = s.{col}" for col in _LABEL_COLS)
+    # DuckDB: UPDATE SET 절에 qualified 컬럼명(s.col) 불가 → correlated subquery 사용
+    set_parts = [
+        f"{col} = (SELECT s.{col} FROM _lbls s"
+        f" WHERE CAST(s.date AS DATE) = universe_daily.date AND s.ticker = universe_daily.ticker)"
+        for col in _LABEL_COLS
+    ]
     conn = get_conn()
     try:
         conn.register("_lbls", df_labels)
-        conn.execute(f"""
+        conn.execute("""
             UPDATE universe_daily
-            SET {set_clause}
-            FROM _lbls s
-            WHERE universe_daily.date = CAST(s.date AS DATE)
-              AND universe_daily.ticker = s.ticker
-        """)
+            SET {}
+            WHERE EXISTS (
+                SELECT 1 FROM _lbls s
+                WHERE CAST(s.date AS DATE) = universe_daily.date
+                  AND s.ticker = universe_daily.ticker
+            )
+        """.format(",\n                ".join(set_parts)))
         logger.info("universe_daily 라벨 UPDATE 완료: %d건", len(labeled_rows))
     except Exception:
         logger.exception("universe_daily 라벨 UPDATE 실패")
