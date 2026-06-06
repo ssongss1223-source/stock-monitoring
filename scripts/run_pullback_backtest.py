@@ -306,9 +306,97 @@ def phase_p5(conn) -> None:
     print(f"  판정: {verdict}")
 
 
+def phase_p5_diag(conn) -> None:
+    """rolling window 효과 분해: threshold=55, LOOKBACK 100/250/500 비교.
+
+    2x2 분해: P3 생존 여부 × rolling window(threshold=55) 생존 여부
+    - TP: P3 good & rolling good  (rolling이 유지)
+    - FN: P3 good & rolling bad   (rolling이 탈락시킴)
+    - FP: P3 bad  & rolling good  (rolling이 구제)
+    - TN: P3 bad  & rolling bad
+    """
+    from backtest.pullback_signal import compute_signals
+
+    universe = load_universe(conn, min_days=5000)
+    THR = 55
+    LOOKBACKS = [100, 250, 500]
+
+    print(f"\n{'#'*60}")
+    print(f"# P5 진단 — threshold={THR}, LOOKBACK 100/250/500 비교")
+    print(f"# 대상: {len(universe)}종목")
+    print(f"{'#'*60}")
+
+    for lb in LOOKBACKS:
+        tp: list[tuple] = []  # (name, calmar_base, calmar_filt)
+        fn: list[tuple] = []
+        fp: list[tuple] = []
+        tn: list[tuple] = []
+
+        for u in universe:
+            ticker = u["ticker"]
+            name = u["name"]
+            df = conn.execute(
+                "SELECT date, open, high, low, close FROM ohlcv_daily "
+                "WHERE ticker = ? ORDER BY date", [ticker],
+            ).df()
+            if df.empty or len(df) < lb + 200:
+                continue
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+
+            sig = compute_signals(df, 200, 50, 5.0, 20)
+            rolling_cnt = (
+                sig["entry"].astype(int)
+                .shift(1).fillna(0)
+                .rolling(lb, min_periods=1)
+                .sum()
+            )
+
+            m_base = run_single(df)
+            calmar_base = m_base["calmar"]
+            entry_mask = sig["entry"] & (rolling_cnt < THR)
+            m_filt = run_single(df, entry_mask=entry_mask)
+            calmar_filt = m_filt["calmar"]
+
+            rec = (name, calmar_base, calmar_filt)
+            if calmar_base >= 0.2 and calmar_filt >= 0.2:
+                tp.append(rec)
+            elif calmar_base >= 0.2 and calmar_filt < 0.2:
+                fn.append(rec)
+            elif calmar_base < 0.2 and calmar_filt >= 0.2:
+                fp.append(rec)
+            else:
+                tn.append(rec)
+
+        n_p3 = len(tp) + len(fn)
+        total = len(tp) + len(fn) + len(fp) + len(tn)
+
+        print(f"\n=== LOOKBACK={lb}일 ===")
+        print(f"  P3 생존 {n_p3}개 중:")
+        avg_tp = sum(x[2] for x in tp) / len(tp) if tp else 0.0
+        avg_fn = sum(x[2] for x in fn) / len(fn) if fn else 0.0
+        print(f"    TP (rolling도 생존): {len(tp)}개  Calmar avg={avg_tp:.3f}")
+        print(f"    FN (rolling이 탈락): {len(fn)}개  Calmar avg={avg_fn:.3f}")
+        if fn:
+            top_fn = sorted(fn, key=lambda x: x[1], reverse=True)[:8]
+            print(f"      탈락: {', '.join(f'{x[0]}({x[1]:.2f})' for x in top_fn)}")
+        print(f"  P3 실패 {total - n_p3}개 중:")
+        avg_fp = sum(x[2] for x in fp) / len(fp) if fp else 0.0
+        print(f"    FP (rolling이 구제): {len(fp)}개  Calmar avg={avg_fp:.3f}")
+        if fp:
+            top_fp = sorted(fp, key=lambda x: x[2], reverse=True)[:5]
+            print(f"      구제: {', '.join(f'{x[0]}({x[2]:.2f})' for x in top_fp)}")
+        if n_p3:
+            print(f"  P3 생존 유지율: {len(tp)}/{n_p3} = {len(tp)/n_p3:.1%}")
+        base_avg = sum(x[1] for x in tp + fn) / n_p3 if n_p3 else 0.0
+        filt_n = len(tp) + len(fp)
+        filt_avg = sum(x[2] for x in tp + fp) / filt_n if filt_n else 0.0
+        print(f"  Calmar avg: P3 생존({base_avg:.3f}) → rolling 생존({filt_avg:.3f})")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "p5", "all"], default="p1")
+    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "p5", "p5_diag", "all"], default="p1")
     args = parser.parse_args()
 
     conn = get_conn(read_only=True)
@@ -323,6 +411,8 @@ def main() -> None:
             phase_p4(conn)
         if args.phase in ("p5", "all"):
             phase_p5(conn)
+        if args.phase == "p5_diag":
+            phase_p5_diag(conn)
     finally:
         conn.close()
 
