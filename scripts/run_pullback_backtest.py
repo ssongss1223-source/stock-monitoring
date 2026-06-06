@@ -520,7 +520,7 @@ def phase_p6_wf(conn) -> None:
 
     universe = load_universe(conn, min_days=5000)
     MIN_CALIB_YEARS = 7
-    CALMAR_THRESH = 0.5
+    CALMAR_THRESH = 0.3
 
     # 전체 데이터 날짜 범위 파악
     date_range = conn.execute(
