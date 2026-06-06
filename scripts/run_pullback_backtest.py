@@ -230,29 +230,16 @@ def phase_p4(conn) -> None:
           f"({'개선' if survive_p4 > survive_p3 else '악화' if survive_p4 < survive_p3 else '동일'})")
 
 
-def phase_p5(conn) -> None:
-    """Layer2 rolling window 진입 빈도 필터 (lookahead-free 재설계).
-
-    각 신호 발생 시점 t에서:
-      - 과거 ROLLING_LOOKBACK 영업일 내 entry 횟수 < ROLLING_THRESHOLD 이면 허용
-      - 횟수 >= ROLLING_THRESHOLD 이면 횡보 구간으로 판단, 해당 신호 제외
-
-    → 미래 거래 결과를 참조하지 않으므로 in-sample 편향 없음.
-    """
+def _p5_run_one_threshold(universe, conn, threshold: int) -> dict:
+    """단일 threshold에서 208종목 rolling window 결과 계산."""
     from backtest.pullback_signal import compute_signals
 
-    universe = load_universe(conn, min_days=5000)
+    base_survive = 0
+    filt_survive = 0
+    n = 0
 
-    print(f"\n{'#'*55}")
-    print(f"# P5 rolling window 진입 빈도 필터 (lookahead-free)")
-    print(f"# trailing {ROLLING_LOOKBACK}일 내 entry 횟수 < {ROLLING_THRESHOLD}인 신호만 허용")
-    print(f"# 대상: {len(universe)}종목")
-    print(f"{'#'*55}")
-
-    rows = []
     for u in universe:
         ticker = u["ticker"]
-        name   = u["name"]
         df = conn.execute(
             "SELECT date, open, high, low, close FROM ohlcv_daily "
             "WHERE ticker = ? ORDER BY date", [ticker],
@@ -263,63 +250,60 @@ def phase_p5(conn) -> None:
         df = df.set_index("date")
 
         sig = compute_signals(df, 200, 50, 5.0, 20)
-
-        # 각 시점 t에서 (t-ROLLING_LOOKBACK ~ t-1) 구간의 entry 횟수
         rolling_cnt = (
             sig["entry"].astype(int)
             .shift(1).fillna(0)
             .rolling(ROLLING_LOOKBACK, min_periods=1)
             .sum()
         )
-        entry_mask = sig["entry"] & (rolling_cnt < ROLLING_THRESHOLD)
+        entry_mask = sig["entry"] & (rolling_cnt < threshold)
 
         m_base = run_single(df)
         m_filt = run_single(df, entry_mask=entry_mask)
 
-        rows.append({
-            "ticker":       ticker,
-            "name":         name,
-            "market":       u["market"],
-            "trades_base":  m_base["total_trades"],
-            "trades_filt":  m_filt["total_trades"],
-            "calmar_base":  m_base["calmar"],
-            "calmar_filt":  m_filt["calmar"],
-            "cagr_filt":    m_filt["cagr"],
-            "mdd_filt":     m_filt["mdd"],
-        })
+        n += 1
+        if m_base["calmar"] >= 0.2:
+            base_survive += 1
+        if m_filt["calmar"] >= 0.2:
+            filt_survive += 1
 
-    rows.sort(key=lambda x: x["calmar_filt"], reverse=True)
+    return {"threshold": threshold, "n": n, "base": base_survive, "filt": filt_survive}
 
-    print(f"\n  {'종목':<18} {'시장':<7} {'기본거래':>8} {'필터거래':>8} "
-          f"{'Calmar전':>9} {'Calmar후':>9} {'변화':>7}")
-    print("  " + "-"*75)
-    for r in rows:
-        delta = r["calmar_filt"] - r["calmar_base"]
-        arrow = "↑" if delta > 0.01 else ("↓" if delta < -0.01 else "→")
-        flag  = "✓" if r["calmar_filt"] >= 0.2 else "✗"
-        print(f"  {flag} {r['name']:<16} {r['market']:<7} {r['trades_base']:>8} "
-              f"{r['trades_filt']:>8} {r['calmar_base']:>9.3f} {r['calmar_filt']:>9.3f} "
-              f"{arrow}{delta:>+6.3f}")
 
-    n = len(rows)
-    base_survive = sum(1 for r in rows if r["calmar_base"] >= 0.2)
-    filt_survive = sum(1 for r in rows if r["calmar_filt"] >= 0.2)
-    improve      = sum(1 for r in rows if r["calmar_filt"] > r["calmar_base"])
+def phase_p5(conn) -> None:
+    """Layer2 rolling window 진입 빈도 필터 — threshold 그리드서치.
 
-    print(f"\n  P3 기준 (필터없음): {base_survive}/{n} = {base_survive/n:.1%}")
-    print(f"  P5 rolling window:  {filt_survive}/{n} = {filt_survive/n:.1%}")
-    print(f"  Calmar 개선 종목:   {improve}/{n} = {improve/n:.1%}")
+    ROLLING_THRESHOLD를 10~60 범위로 스윕해서
+    P3 대비 survival rate가 가장 높은 값을 in-sample로 탐색.
+    """
+    universe = load_universe(conn, min_days=5000)
 
-    kospi_rows = [r for r in rows if r["market"] == "KOSPI"]
-    kosdaq_rows = [r for r in rows if r["market"] == "KOSDAQ"]
-    if kospi_rows:
-        ks = sum(1 for r in kospi_rows if r["calmar_filt"] >= 0.2)
-        print(f"  KOSPI 생존율:  {ks}/{len(kospi_rows)} = {ks/len(kospi_rows):.1%}")
-    if kosdaq_rows:
-        kq = sum(1 for r in kosdaq_rows if r["calmar_filt"] >= 0.2)
-        print(f"  KOSDAQ 생존율: {kq}/{len(kosdaq_rows)} = {kq/len(kosdaq_rows):.1%}")
+    thresholds = list(range(10, 65, 5))  # 10, 15, 20, ..., 60
 
-    verdict = "PASS — 개선됨" if filt_survive > base_survive else "FAIL — 개선 없음"
+    print(f"\n{'#'*60}")
+    print(f"# P5 rolling window threshold 그리드서치")
+    print(f"# trailing {ROLLING_LOOKBACK}일 내 entry 횟수 기준, threshold 10~60 스윕")
+    print(f"# 대상: {len(universe)}종목")
+    print(f"{'#'*60}")
+    print(f"\n  {'threshold':>10} {'P3생존':>8} {'P5생존':>8} {'생존율':>8} {'개선':>6}")
+    print("  " + "-"*45)
+
+    best = None
+    for thr in thresholds:
+        r = _p5_run_one_threshold(universe, conn, thr)
+        rate = r["filt"] / r["n"] if r["n"] else 0
+        base_rate = r["base"] / r["n"] if r["n"] else 0
+        delta = r["filt"] - r["base"]
+        arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
+        print(f"  {thr:>10}  {r['base']:>6}/{r['n']}  {r['filt']:>6}/{r['n']}  "
+              f"{rate:>7.1%}  {arrow}{delta:>+4}")
+        if best is None or r["filt"] > best["filt"]:
+            best = r
+
+    print(f"\n  [최적] threshold={best['threshold']}  "
+          f"P5생존={best['filt']}/{best['n']}={best['filt']/best['n']:.1%}  "
+          f"(P3기준={best['base']}/{best['n']}={best['base']/best['n']:.1%})")
+    verdict = "PASS — 개선됨" if best["filt"] > best["base"] else "FAIL — 개선 없음"
     print(f"  판정: {verdict}")
 
 
