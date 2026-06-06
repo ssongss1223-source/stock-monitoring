@@ -509,9 +509,118 @@ def phase_p5_diag(conn) -> None:
         print(f"  Calmar avg: P3 생존({base_avg:.3f}) → rolling 생존({filt_avg:.3f})")
 
 
+def phase_p6_wf(conn) -> None:
+    """Option B: Walk-Forward Expanding Window calibration split.
+
+    최소 7년 calibration → 이후 매년 test.
+    calib 기간에서 Calmar >= 0.5인 종목만 test 연도에 백테스트.
+    선별 종목 vs 비선별 종목 test 성과를 비교해 calibration 예측력 검증.
+    """
+    import datetime
+
+    universe = load_universe(conn, min_days=5000)
+    MIN_CALIB_YEARS = 7
+    CALMAR_THRESH = 0.5
+
+    # 전체 데이터 날짜 범위 파악
+    date_range = conn.execute(
+        "SELECT MIN(date), MAX(date) FROM ohlcv_daily"
+    ).fetchone()
+    data_start = pd.Timestamp(date_range[0])
+    data_end   = pd.Timestamp(date_range[1])
+
+    first_test_year = data_start.year + MIN_CALIB_YEARS
+    last_test_year  = data_end.year - 1  # 마지막 연도는 test 불완전할 수 있음
+
+    print(f"\n{'#'*65}")
+    print(f"# P6 Walk-Forward Expanding Window")
+    print(f"# 데이터: {data_start.date()} ~ {data_end.date()}")
+    print(f"# 최소 calibration: {MIN_CALIB_YEARS}년  선별 기준: Calmar >= {CALMAR_THRESH}")
+    print(f"# test 연도: {first_test_year} ~ {last_test_year}  ({last_test_year - first_test_year + 1}회)")
+    print(f"# 대상: {len(universe)}종목")
+    print(f"{'#'*65}")
+
+    # WF 결과 집계
+    wf_rows = []  # (year, n_sel, sel_calmar_med, nosel_calmar_med, better)
+
+    for test_year in range(first_test_year, last_test_year + 1):
+        calib_end   = pd.Timestamp(f"{test_year - 1}-12-31")
+        test_start  = pd.Timestamp(f"{test_year}-01-01")
+        test_end    = pd.Timestamp(f"{test_year}-12-31")
+
+        sel_calmars   = []  # calibration 통과 종목의 test 성과
+        nosel_calmars = []  # calibration 탈락 종목의 test 성과
+
+        for u in universe:
+            ticker = u["ticker"]
+            df = conn.execute(
+                "SELECT date, open, high, low, close FROM ohlcv_daily "
+                "WHERE ticker = ? ORDER BY date", [ticker],
+            ).df()
+            if df.empty:
+                continue
+            df["date"] = pd.to_datetime(df["date"])
+            df = df.set_index("date")
+
+            df_calib = df[df.index <= calib_end]
+            df_test  = df[(df.index >= test_start) & (df.index <= test_end)]
+
+            # calibration: 최소 MIN_CALIB_YEARS년치 데이터 필요
+            min_calib_days = MIN_CALIB_YEARS * 200  # 영업일 기준 (252 × 7 ≈ 1764, 여유있게 200×7)
+            if len(df_calib) < min_calib_days or len(df_test) < 50:
+                continue
+
+            calmar_calib = run_single(df_calib)["calmar"]
+            calmar_test  = run_single(df_test)["calmar"]
+
+            if calmar_calib >= CALMAR_THRESH:
+                sel_calmars.append(calmar_test)
+            else:
+                nosel_calmars.append(calmar_test)
+
+        if not sel_calmars:
+            continue
+
+        sel_med   = sorted(sel_calmars)[len(sel_calmars) // 2]
+        nosel_med = sorted(nosel_calmars)[len(nosel_calmars) // 2] if nosel_calmars else float("nan")
+        better    = sel_med > nosel_med if nosel_calmars else True
+        wf_rows.append((test_year, len(sel_calmars), sel_med, nosel_med, better))
+
+        arrow = "✓" if better else "✗"
+        print(f"  {arrow} {test_year}: 선별={len(sel_calmars)}종목  "
+              f"선별Calmar중앙값={sel_med:.3f}  비선별={nosel_med:.3f}")
+
+    # 전체 요약
+    if not wf_rows:
+        print("  결과 없음")
+        return
+
+    n_better = sum(1 for r in wf_rows if r[4])
+    all_sel   = [r[2] for r in wf_rows]
+    all_nosel = [r[3] for r in wf_rows if r[3] == r[3]]  # nan 제외
+
+    print(f"\n{'='*55}")
+    print(f"  WF 요약 ({len(wf_rows)}개 연도)")
+    print(f"  선별 종목이 비선별보다 우수한 연도: {n_better}/{len(wf_rows)} = {n_better/len(wf_rows):.1%}")
+    overall_sel   = sorted(all_sel)[len(all_sel) // 2]
+    overall_nosel = sorted(all_nosel)[len(all_nosel) // 2] if all_nosel else float("nan")
+    print(f"  전체 Calmar 중앙값: 선별={overall_sel:.3f}  비선별={overall_nosel:.3f}")
+    if n_better / len(wf_rows) >= 0.6 and overall_sel > overall_nosel:
+        verdict = "PASS — calibration 선별력 유효"
+    elif n_better / len(wf_rows) >= 0.5:
+        verdict = "부분 유효 — 추가 분석 필요"
+    else:
+        verdict = "FAIL — calibration 예측력 없음"
+    print(f"  판정: {verdict}")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "p5", "p5_diag", "p5_grid2d", "all"], default="p1")
+    parser.add_argument(
+        "--phase",
+        choices=["p1", "p2", "p3", "p4", "p5", "p5_diag", "p5_grid2d", "p6_wf", "all"],
+        default="p1",
+    )
     args = parser.parse_args()
 
     conn = get_conn(read_only=True)
@@ -530,6 +639,8 @@ def main() -> None:
             phase_p5_diag(conn)
         if args.phase == "p5_grid2d":
             phase_p5_grid2d(conn)
+        if args.phase == "p6_wf":
+            phase_p6_wf(conn)
     finally:
         conn.close()
 
