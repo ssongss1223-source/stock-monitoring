@@ -230,13 +230,25 @@ def phase_p4(conn) -> None:
           f"({'개선' if survive_p4 > survive_p3 else '악화' if survive_p4 < survive_p3 else '동일'})")
 
 
-def _p5_run_one_threshold(universe, conn, threshold: int) -> dict:
-    """단일 threshold에서 208종목 rolling window 결과 계산."""
+def phase_p5(conn) -> None:
+    """Layer2 rolling window 진입 빈도 필터 — threshold 그리드서치.
+
+    종목을 1번만 순회하면서 threshold 10~60을 내부에서 동시 처리.
+    DB 조회·신호 계산: 208번 (threshold당 반복 없음).
+    """
     from backtest.pullback_signal import compute_signals
 
-    base_survive = 0
-    filt_survive = 0
-    n = 0
+    universe = load_universe(conn, min_days=5000)
+    thresholds = list(range(10, 65, 5))  # 10, 15, 20, ..., 60
+
+    print(f"\n{'#'*60}")
+    print(f"# P5 rolling window threshold 그리드서치")
+    print(f"# trailing {ROLLING_LOOKBACK}일 내 entry 횟수 기준, threshold {thresholds[0]}~{thresholds[-1]} 스윕")
+    print(f"# 대상: {len(universe)}종목")
+    print(f"{'#'*60}")
+
+    # threshold별 집계: {thr: {"base": n, "filt": n, "total": n}}
+    counts: dict[int, dict] = {t: {"base": 0, "filt": 0, "total": 0} for t in thresholds}
 
     for u in universe:
         ticker = u["ticker"]
@@ -256,53 +268,40 @@ def _p5_run_one_threshold(universe, conn, threshold: int) -> dict:
             .rolling(ROLLING_LOOKBACK, min_periods=1)
             .sum()
         )
-        entry_mask = sig["entry"] & (rolling_cnt < threshold)
 
         m_base = run_single(df)
-        m_filt = run_single(df, entry_mask=entry_mask)
+        calmar_base = m_base["calmar"]
 
-        n += 1
-        if m_base["calmar"] >= 0.2:
-            base_survive += 1
-        if m_filt["calmar"] >= 0.2:
-            filt_survive += 1
+        for thr in thresholds:
+            entry_mask = sig["entry"] & (rolling_cnt < thr)
+            m_filt = run_single(df, entry_mask=entry_mask)
+            counts[thr]["total"] += 1
+            if calmar_base >= 0.2:
+                counts[thr]["base"] += 1
+            if m_filt["calmar"] >= 0.2:
+                counts[thr]["filt"] += 1
 
-    return {"threshold": threshold, "n": n, "base": base_survive, "filt": filt_survive}
-
-
-def phase_p5(conn) -> None:
-    """Layer2 rolling window 진입 빈도 필터 — threshold 그리드서치.
-
-    ROLLING_THRESHOLD를 10~60 범위로 스윕해서
-    P3 대비 survival rate가 가장 높은 값을 in-sample로 탐색.
-    """
-    universe = load_universe(conn, min_days=5000)
-
-    thresholds = list(range(10, 65, 5))  # 10, 15, 20, ..., 60
-
-    print(f"\n{'#'*60}")
-    print(f"# P5 rolling window threshold 그리드서치")
-    print(f"# trailing {ROLLING_LOOKBACK}일 내 entry 횟수 기준, threshold 10~60 스윕")
-    print(f"# 대상: {len(universe)}종목")
-    print(f"{'#'*60}")
-    print(f"\n  {'threshold':>10} {'P3생존':>8} {'P5생존':>8} {'생존율':>8} {'개선':>6}")
-    print("  " + "-"*45)
+    print(f"\n  {'threshold':>10} {'P3생존':>10} {'P5생존':>10} {'생존율':>8} {'개선':>6}")
+    print("  " + "-"*50)
 
     best = None
     for thr in thresholds:
-        r = _p5_run_one_threshold(universe, conn, thr)
-        rate = r["filt"] / r["n"] if r["n"] else 0
-        base_rate = r["base"] / r["n"] if r["n"] else 0
-        delta = r["filt"] - r["base"]
+        c = counts[thr]
+        n = c["total"]
+        if n == 0:
+            continue
+        rate = c["filt"] / n
+        delta = c["filt"] - c["base"]
         arrow = "↑" if delta > 0 else ("↓" if delta < 0 else "→")
-        print(f"  {thr:>10}  {r['base']:>6}/{r['n']}  {r['filt']:>6}/{r['n']}  "
+        print(f"  {thr:>10}  {c['base']:>5}/{n}  {c['filt']:>5}/{n}  "
               f"{rate:>7.1%}  {arrow}{delta:>+4}")
-        if best is None or r["filt"] > best["filt"]:
-            best = r
+        if best is None or c["filt"] > best["filt"]:
+            best = {**c, "threshold": thr}
 
+    n = best["total"]
     print(f"\n  [최적] threshold={best['threshold']}  "
-          f"P5생존={best['filt']}/{best['n']}={best['filt']/best['n']:.1%}  "
-          f"(P3기준={best['base']}/{best['n']}={best['base']/best['n']:.1%})")
+          f"P5={best['filt']}/{n}={best['filt']/n:.1%}  "
+          f"(P3={best['base']}/{n}={best['base']/n:.1%})")
     verdict = "PASS — 개선됨" if best["filt"] > best["base"] else "FAIL — 개선 없음"
     print(f"  판정: {verdict}")
 
