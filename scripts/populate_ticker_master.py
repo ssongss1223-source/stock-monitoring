@@ -36,7 +36,10 @@ def main() -> None:
     ).fetchall()]
     print(f"ohlcv_daily 종목수: {len(tickers)}")
 
-    today = date.today().strftime("%Y%m%d")
+    # 주말/공휴일에 실행해도 유효한 영업일을 사용하도록 DB 최신 날짜 기준
+    last_date = conn.execute("SELECT MAX(date) FROM ohlcv_daily").fetchone()[0]
+    today = last_date.strftime("%Y%m%d")
+    print(f"pykrx 기준일: {today}")
 
     print("pykrx 시장 목록 조회 중...")
     kospi_set = set(krx.get_market_ticker_list(today, market="KOSPI"))
