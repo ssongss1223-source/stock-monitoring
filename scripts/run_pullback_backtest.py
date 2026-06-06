@@ -345,7 +345,7 @@ def phase_p5_grid2d(conn) -> None:
 
         sig = compute_signals(df, 200, 50, 5.0, 20)
         calmar_base = run_single(df)["calmar"]
-        p3_good = calmar_base >= 0.2
+        p3_good = calmar_base >= 0.5
 
         for lb in LOOKBACKS:
             rolling_cnt = (
@@ -357,7 +357,7 @@ def phase_p5_grid2d(conn) -> None:
             for thr in THRESHOLDS:
                 entry_mask = sig["entry"] & (rolling_cnt < thr)
                 calmar_filt = run_single(df, entry_mask=entry_mask)["calmar"]
-                p5_good = calmar_filt >= 0.2
+                p5_good = calmar_filt >= 0.5
 
                 r = results[lb][thr]
                 r["total"] += 1
