@@ -529,27 +529,31 @@ def phase_p6_wf(conn) -> None:
     data_start = pd.Timestamp(date_range[0])
     data_end   = pd.Timestamp(date_range[1])
 
+    # 2년 test 윈도우: SMA(200)+lookback(50) 워밍업 확보, 데이터 누출 없음
+    TEST_WINDOW_YEARS = 2
     first_test_year = data_start.year + MIN_CALIB_YEARS
-    last_test_year  = data_end.year - 1  # 마지막 연도는 test 불완전할 수 있음
+    last_test_year  = data_end.year - TEST_WINDOW_YEARS
 
+    n_iterations = len(range(first_test_year, last_test_year + 1, TEST_WINDOW_YEARS))
     print(f"\n{'#'*65}")
     print(f"# P6 Walk-Forward Expanding Window")
     print(f"# 데이터: {data_start.date()} ~ {data_end.date()}")
     print(f"# 최소 calibration: {MIN_CALIB_YEARS}년  선별 기준: Calmar >= {CALMAR_THRESH}")
-    print(f"# test 연도: {first_test_year} ~ {last_test_year}  ({last_test_year - first_test_year + 1}회)")
+    print(f"# test 윈도우: {TEST_WINDOW_YEARS}년  반복: {n_iterations}회")
     print(f"# 대상: {len(universe)}종목")
     print(f"{'#'*65}")
 
     # WF 결과 집계
-    wf_rows = []  # (year, n_sel, sel_calmar_med, nosel_calmar_med, better)
+    wf_rows = []  # (label, n_sel, sel_calmar_med, nosel_calmar_med, better)
 
-    for test_year in range(first_test_year, last_test_year + 1):
-        calib_end   = pd.Timestamp(f"{test_year - 1}-12-31")
-        test_start  = pd.Timestamp(f"{test_year}-01-01")
-        test_end    = pd.Timestamp(f"{test_year}-12-31")
+    for test_year in range(first_test_year, last_test_year + 1, TEST_WINDOW_YEARS):
+        calib_end  = pd.Timestamp(f"{test_year - 1}-12-31")
+        test_start = pd.Timestamp(f"{test_year}-01-01")
+        test_end   = pd.Timestamp(f"{test_year + TEST_WINDOW_YEARS - 1}-12-31")
+        label      = f"{test_year}-{test_year + TEST_WINDOW_YEARS - 1}"
 
-        sel_calmars   = []  # calibration 통과 종목의 test 성과
-        nosel_calmars = []  # calibration 탈락 종목의 test 성과
+        sel_calmars   = []
+        nosel_calmars = []
 
         for u in universe:
             ticker = u["ticker"]
@@ -565,9 +569,8 @@ def phase_p6_wf(conn) -> None:
             df_calib = df[df.index <= calib_end]
             df_test  = df[(df.index >= test_start) & (df.index <= test_end)]
 
-            # calibration: 최소 MIN_CALIB_YEARS년치 데이터 필요
-            min_calib_days = MIN_CALIB_YEARS * 200  # 영업일 기준 (252 × 7 ≈ 1764, 여유있게 200×7)
-            if len(df_calib) < min_calib_days or len(df_test) < 50:
+            min_calib_days = MIN_CALIB_YEARS * 200
+            if len(df_calib) < min_calib_days or len(df_test) < 300:
                 continue
 
             calmar_calib = run_single(df_calib)["calmar"]
@@ -584,10 +587,10 @@ def phase_p6_wf(conn) -> None:
         sel_med   = sorted(sel_calmars)[len(sel_calmars) // 2]
         nosel_med = sorted(nosel_calmars)[len(nosel_calmars) // 2] if nosel_calmars else float("nan")
         better    = sel_med > nosel_med if nosel_calmars else True
-        wf_rows.append((test_year, len(sel_calmars), sel_med, nosel_med, better))
+        wf_rows.append((label, len(sel_calmars), sel_med, nosel_med, better))
 
         arrow = "✓" if better else "✗"
-        print(f"  {arrow} {test_year}: 선별={len(sel_calmars)}종목  "
+        print(f"  {arrow} {label}: 선별={len(sel_calmars)}종목  "
               f"선별Calmar중앙값={sel_med:.3f}  비선별={nosel_med:.3f}")
 
     # 전체 요약
@@ -600,8 +603,8 @@ def phase_p6_wf(conn) -> None:
     all_nosel = [r[3] for r in wf_rows if r[3] == r[3]]  # nan 제외
 
     print(f"\n{'='*55}")
-    print(f"  WF 요약 ({len(wf_rows)}개 연도)")
-    print(f"  선별 종목이 비선별보다 우수한 연도: {n_better}/{len(wf_rows)} = {n_better/len(wf_rows):.1%}")
+    print(f"  WF 요약 ({len(wf_rows)}개 구간)")
+    print(f"  선별 종목이 비선별보다 우수한 구간: {n_better}/{len(wf_rows)} = {n_better/len(wf_rows):.1%}")
     overall_sel   = sorted(all_sel)[len(all_sel) // 2]
     overall_nosel = sorted(all_nosel)[len(all_nosel) // 2] if all_nosel else float("nan")
     print(f"  전체 Calmar 중앙값: 선별={overall_sel:.3f}  비선별={overall_nosel:.3f}")
