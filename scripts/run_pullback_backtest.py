@@ -306,6 +306,121 @@ def phase_p5(conn) -> None:
     print(f"  판정: {verdict}")
 
 
+def phase_p5_grid2d(conn) -> None:
+    """LOOKBACK × threshold 2D 그리드서치 — 종목 1회 순회로 전체 조합 처리.
+
+    LOOKBACK: 최근 N일간 raw entry 신호 수 카운트 기간
+    threshold: 카운트 < threshold 일 때만 진입 허용
+    평가: TP율(P3 생존 유지) - FP율(P3 실패 중 오구제) 기준
+    """
+    from backtest.pullback_signal import compute_signals
+
+    universe = load_universe(conn, min_days=5000)
+    LOOKBACKS  = [50, 100, 150, 200, 300, 500]
+    THRESHOLDS = [2, 5, 8, 10, 15, 20, 25, 30, 40, 50, 60]
+
+    print(f"\n{'#'*65}")
+    print(f"# P5 2D 그리드서치: LOOKBACK × threshold")
+    print(f"# LOOKBACK: {LOOKBACKS}")
+    print(f"# threshold: {THRESHOLDS}")
+    print(f"# 대상: {len(universe)}종목  조합: {len(LOOKBACKS)*len(THRESHOLDS)}개")
+    print(f"{'#'*65}")
+
+    results = {
+        lb: {thr: {"base": 0, "tp": 0, "fn": 0, "fp": 0, "total": 0}
+             for thr in THRESHOLDS}
+        for lb in LOOKBACKS
+    }
+
+    for i, u in enumerate(universe, 1):
+        ticker = u["ticker"]
+        df = conn.execute(
+            "SELECT date, open, high, low, close FROM ohlcv_daily "
+            "WHERE ticker = ? ORDER BY date", [ticker],
+        ).df()
+        if df.empty or len(df) < 700:
+            continue
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+
+        sig = compute_signals(df, 200, 50, 5.0, 20)
+        calmar_base = run_single(df)["calmar"]
+        p3_good = calmar_base >= 0.2
+
+        for lb in LOOKBACKS:
+            rolling_cnt = (
+                sig["entry"].astype(int)
+                .shift(1).fillna(0)
+                .rolling(lb, min_periods=1)
+                .sum()
+            )
+            for thr in THRESHOLDS:
+                entry_mask = sig["entry"] & (rolling_cnt < thr)
+                calmar_filt = run_single(df, entry_mask=entry_mask)["calmar"]
+                p5_good = calmar_filt >= 0.2
+
+                r = results[lb][thr]
+                r["total"] += 1
+                if p3_good:
+                    r["base"] += 1
+                    if p5_good:
+                        r["tp"] += 1
+                    else:
+                        r["fn"] += 1
+                else:
+                    if p5_good:
+                        r["fp"] += 1
+
+        if i % 20 == 0:
+            print(f"  [{i}/{len(universe)}] 진행 중...")
+
+    # ── TP율 요약 테이블 ─────────────────────────────────────────────
+    n_p3 = results[LOOKBACKS[0]][THRESHOLDS[0]]["base"]
+    print(f"\nP3 baseline: {n_p3}개 생존 ({n_p3/results[LOOKBACKS[0]][THRESHOLDS[0]]['total']:.1%})\n")
+    print("  [TP율 — P3 생존 중 rolling도 생존 비율]")
+    print(f"  {'LB':>5}" + "".join(f" {t:>5}" for t in THRESHOLDS))
+    print("  " + "-" * (6 + 6 * len(THRESHOLDS)))
+    for lb in LOOKBACKS:
+        row = f"  {lb:>5}"
+        for thr in THRESHOLDS:
+            r = results[lb][thr]
+            rate = r["tp"] / r["base"] if r["base"] else 0
+            row += f" {rate:>4.0%} "
+        print(row)
+
+    # ── 상위 10 조합 (TP율 - FP율 기준) ─────────────────────────────
+    combos = []
+    for lb in LOOKBACKS:
+        for thr in THRESHOLDS:
+            r = results[lb][thr]
+            if r["base"] == 0:
+                continue
+            n_not_p3 = r["total"] - r["base"]
+            tp_rate = r["tp"] / r["base"]
+            fp_rate = r["fp"] / n_not_p3 if n_not_p3 else 0
+            score = tp_rate - fp_rate
+            combos.append((score, lb, thr, r["tp"], r["fn"], r["fp"], tp_rate, fp_rate))
+    combos.sort(reverse=True)
+
+    print(f"\n  [상위 10 조합]")
+    print(f"  {'LB':>5} {'THR':>5} {'TP':>4} {'FN':>4} {'FP':>4} {'TP율':>7} {'FP율':>7} {'score':>7}")
+    print("  " + "-" * 52)
+    for row in combos[:10]:
+        score, lb, thr, tp, fn, fp, tp_rate, fp_rate = row
+        print(f"  {lb:>5} {thr:>5} {tp:>4} {fn:>4} {fp:>4} {tp_rate:>7.1%} {fp_rate:>7.1%} {score:>7.3f}")
+
+    score, lb, thr, tp, fn, fp, tp_rate, fp_rate = combos[0]
+    print(f"\n  [최적] LOOKBACK={lb}, threshold={thr}")
+    print(f"         TP={tp}  FN={fn}  FP={fp}  TP율={tp_rate:.1%}  FP율={fp_rate:.1%}")
+    if tp_rate >= 0.7 and fp_rate <= 0.1:
+        verdict = "PASS — rolling window 유효"
+    elif tp_rate >= 0.5:
+        verdict = "부분 유효 — 추가 분석 필요"
+    else:
+        verdict = "FAIL — Option B 전환 검토"
+    print(f"  판정: {verdict}")
+
+
 def phase_p5_diag(conn) -> None:
     """rolling window 효과 분해: threshold=55, LOOKBACK 100/250/500 비교.
 
@@ -396,7 +511,7 @@ def phase_p5_diag(conn) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "p5", "p5_diag", "all"], default="p1")
+    parser.add_argument("--phase", choices=["p1", "p2", "p3", "p4", "p5", "p5_diag", "p5_grid2d", "all"], default="p1")
     args = parser.parse_args()
 
     conn = get_conn(read_only=True)
@@ -413,6 +528,8 @@ def main() -> None:
             phase_p5(conn)
         if args.phase == "p5_diag":
             phase_p5_diag(conn)
+        if args.phase == "p5_grid2d":
+            phase_p5_grid2d(conn)
     finally:
         conn.close()
 
