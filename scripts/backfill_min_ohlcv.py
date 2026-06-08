@@ -107,9 +107,9 @@ def run(from_ticker: str | None) -> None:
         "SELECT DISTINCT ticker FROM universe_daily ORDER BY ticker"
     ).fetchall()]
 
-    # yfinance 백필 완료 종목 스킵
+    # 2024-01-01 이전 데이터가 이미 있으면 백필 완료로 간주
     done = set(r[0] for r in conn.execute(
-        "SELECT DISTINCT ticker FROM ohlcv_min WHERE source = 'yfinance'"
+        "SELECT DISTINCT ticker FROM ohlcv_min WHERE dt < '2024-01-01'"
     ).fetchall())
 
     todo = [t for t in tickers if t not in done]
