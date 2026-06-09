@@ -554,14 +554,17 @@ CREATE TABLE IF NOT EXISTS live_eval_daily (
     n_pairs         INTEGER,
     brier           DOUBLE,
     base_rate       DOUBLE,
+    prec_at_3       DOUBLE,
     prec_at_5       DOUBLE,
     prec_at_10      DOUBLE,
     prec_at_20      DOUBLE,
     prec_at_30      DOUBLE,
+    lift_at_3       DOUBLE,
     lift_at_5       DOUBLE,
     lift_at_10      DOUBLE,
     lift_at_20      DOUBLE,
     lift_at_30      DOUBLE,
+    ret_at_3        DOUBLE,
     ret_at_5        DOUBLE,
     ret_at_10       DOUBLE,
     ret_at_20       DOUBLE,
@@ -569,6 +572,9 @@ CREATE TABLE IF NOT EXISTS live_eval_daily (
     ret_base        DOUBLE,
     spearman        DOUBLE
 );
+ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS prec_at_3 DOUBLE;
+ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS lift_at_3 DOUBLE;
+ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS ret_at_3  DOUBLE;
 """
 
 
