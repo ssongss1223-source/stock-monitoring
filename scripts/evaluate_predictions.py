@@ -1,10 +1,11 @@
 """
-P5 라이브 예측 평가 — signal_xgb_probs × universe_daily 라벨
+P5 라이브 예측 평가 — signal_xgb_probs × universe_daily 라벨 × universe_outcomes 수익률
 
 지표:
-  Brier score   — 확률 보정 품질 (낮을수록 좋음)
-  Prec@K        — 확률 상위 K 종목 중 실제 양성 비율 (기본: K=[5,10,20,30])
-  Lift@K        — Prec@K / 전체 양성 비율 (베이스라인 대비 배수)
+  Brier score       — 확률 보정 품질 (낮을수록 좋음)
+  Prec@K / Lift@K   — 확률 상위 K 종목 중 실제 양성 비율 / 베이스라인 대비 배수
+  Return@K          — 확률 상위 K 종목의 평균 실제 수익률 vs 전체 평균
+  Spearman          — 예측 확률 순위 ↔ 실제 수익률 순위 상관계수
 
 Usage:
     sudo -u stock .venv/bin/python3 scripts/evaluate_predictions.py
@@ -117,6 +118,29 @@ def _load_base_rates(from_date: str, to_date: str) -> dict[str, float]:
     }
 
 
+def _load_returns(from_date: str, to_date: str) -> pd.DataFrame:
+    """universe_outcomes에서 수익률 데이터 로드."""
+    conn = get_conn(read_only=True)
+    try:
+        df = conn.execute(f"""
+            SELECT date AS signal_date, ticker, hold_days, return_close
+            FROM universe_outcomes
+            WHERE date >= CAST('{from_date}' AS DATE)
+              AND date <= CAST('{to_date}' AS DATE)
+        """).df()
+    finally:
+        conn.close()
+    return df
+
+
+def _spearman_corr(probs: pd.Series, returns: pd.Series) -> float | None:
+    """확률 순위 ↔ 수익률 순위 Spearman 상관계수 (scipy 불필요)."""
+    s = pd.DataFrame({"p": probs, "r": returns}).dropna()
+    if len(s) < 3:
+        return None
+    return float(s["p"].rank().corr(s["r"].rank()))
+
+
 def _prec_at_k(group: pd.DataFrame, k: int) -> float | None:
     """한 날짜 내 상위 K 종목의 Precision."""
     labeled = group.dropna(subset=["actual"])
@@ -126,8 +150,13 @@ def _prec_at_k(group: pd.DataFrame, k: int) -> float | None:
     return float(top["actual"].mean())
 
 
-def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_ks: list[int] = None) -> pd.DataFrame:
-    """라벨별 Brier / Prec@K / Lift@K 계산. top_ks 리스트의 각 K에 대해 열 생성."""
+def compute_metrics(
+    df: pd.DataFrame,
+    base_rates: dict[str, float],
+    top_ks: list[int] = None,
+    returns_df: pd.DataFrame | None = None,
+) -> pd.DataFrame:
+    """라벨별 Brier / Prec@K / Lift@K / Return@K / Spearman 계산."""
     if top_ks is None:
         top_ks = [5, 10, 20, 30]
 
@@ -143,10 +172,12 @@ def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_ks: list
             record: dict = {
                 "label": label, "n_dates": 0, "n_pairs": 0,
                 "brier": None, "base_rate": base_rates.get(label),
+                "spearman": None, "ret_base": None,
             }
             for k in top_ks:
                 record[f"prec_at_{k}"] = None
                 record[f"lift_at_{k}"] = None
+                record[f"ret_at_{k}"] = None
             records.append(record)
             continue
 
@@ -170,6 +201,39 @@ def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_ks: list
             record[f"prec_at_{k}"] = round(prec, 4) if prec is not None else None
             record[f"lift_at_{k}"] = round(lift, 2) if lift is not None else None
 
+        # Return@K / Spearman
+        if returns_df is not None and not returns_df.empty:
+            hdays = _LABEL_HOLD[label]
+            ret_sub = returns_df[returns_df["hold_days"] == hdays].merge(
+                sub_labeled[["signal_date", "ticker", "prob"]], on=["signal_date", "ticker"]
+            )
+            if not ret_sub.empty:
+                spear_vals = (
+                    ret_sub.groupby("signal_date")
+                    .apply(lambda g: _spearman_corr(g["prob"], g["return_close"]))
+                    .dropna()
+                )
+                record["spearman"] = round(float(spear_vals.mean()), 4) if not spear_vals.empty else None
+                ret_base_per_date = ret_sub.groupby("signal_date")["return_close"].mean()
+                record["ret_base"] = round(float(ret_base_per_date.mean()), 4) if not ret_base_per_date.empty else None
+                for k in top_ks:
+                    ret_k_vals = (
+                        ret_sub.groupby("signal_date")
+                        .apply(lambda g, _k=k: g.nlargest(min(_k, len(g)), "prob")["return_close"].mean())
+                        .dropna()
+                    )
+                    record[f"ret_at_{k}"] = round(float(ret_k_vals.mean()), 4) if not ret_k_vals.empty else None
+            else:
+                record["spearman"] = None
+                record["ret_base"] = None
+                for k in top_ks:
+                    record[f"ret_at_{k}"] = None
+        else:
+            record["spearman"] = None
+            record["ret_base"] = None
+            for k in top_ks:
+                record[f"ret_at_{k}"] = None
+
         records.append(record)
 
     return pd.DataFrame(records)
@@ -178,6 +242,7 @@ def compute_metrics(df: pd.DataFrame, base_rates: dict[str, float], top_ks: list
 def print_report(metrics: pd.DataFrame, from_date: str, to_date: str) -> None:
     top_ks = sorted([int(c.replace("prec_at_", "")) for c in metrics.columns if c.startswith("prec_at_")])
 
+    # --- 기존: Brier / Prec@K / Lift@K ---
     header = f"{'라벨':22s} {'N일':>4s} {'N건':>6s}  {'Brier':>6s}"
     for k in top_ks:
         header += f"  {'P@' + str(k):>6s}"
@@ -215,6 +280,52 @@ def print_report(metrics: pd.DataFrame, from_date: str, to_date: str) -> None:
             for k in top_ks if f"prec_at_{k}" in labeled.columns
         )
         print(f"평균 (라벨 있는 {len(labeled)}개): Brier={avg_brier:.4f}  {k_summary}")
+
+    # --- 신규: Return@K / Spearman ---
+    ret_cols = [f"ret_at_{k}" for k in top_ks]
+    has_returns = any(
+        pd.notna(metrics[c]).any() for c in ret_cols if c in metrics.columns
+    )
+    if not has_returns:
+        return
+
+    print(f"\n=== Return@K / Spearman ({from_date} ~ {to_date}) ===\n")
+
+    r_header = f"{'라벨':22s} {'N일':>4s}"
+    for k in top_ks:
+        r_header += f"  {'R@' + str(k):>7s}"
+    r_header += f"  {'RBase':>7s}  {'Spear':>6s}"
+    print(r_header)
+    print("-" * len(r_header))
+
+    for _, row in metrics.iterrows():
+        label = str(row["label"])
+        n_dates = int(row["n_dates"]) if pd.notna(row["n_dates"]) else 0
+        line = f"{label:22s} {n_dates:>4d}"
+        for k in top_ks:
+            v = row.get(f"ret_at_{k}")
+            line += f"  {f'{v:.2%}':>7s}" if pd.notna(v) else "      N/A"
+        rb = row.get("ret_base")
+        sp = row.get("spearman")
+        line += f"  {f'{rb:.2%}':>7s}" if pd.notna(rb) else "      N/A"
+        line += f"  {f'{sp:.3f}':>6s}" if pd.notna(sp) else "     N/A"
+        print(line)
+
+    print()
+    if not labeled.empty:
+        parts = []
+        for k in top_ks:
+            col = f"ret_at_{k}"
+            if col in labeled.columns:
+                v = labeled[col].dropna().mean()
+                if pd.notna(v):
+                    parts.append(f"R@{k}={v:.2%}")
+        if "spearman" in labeled.columns:
+            sp_mean = labeled["spearman"].dropna().mean()
+            if pd.notna(sp_mean):
+                parts.append(f"Spearman={sp_mean:.3f}")
+        if parts:
+            print(f"평균 (라벨 있는 {len(labeled)}개): " + "  ".join(parts))
 
 
 def save_to_db(metrics: pd.DataFrame, eval_date: str) -> None:
@@ -271,7 +382,8 @@ def main() -> None:
         sys.exit(0)
 
     base_rates = _load_base_rates(from_date, to_date)
-    metrics = compute_metrics(df, base_rates, top_ks=args.top_k)
+    returns_df = _load_returns(from_date, to_date)
+    metrics = compute_metrics(df, base_rates, top_ks=args.top_k, returns_df=returns_df)
     print_report(metrics, from_date, to_date)
 
     if args.save:
