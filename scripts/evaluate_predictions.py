@@ -328,6 +328,59 @@ def print_report(metrics: pd.DataFrame, from_date: str, to_date: str) -> None:
             print(f"평균 (라벨 있는 {len(labeled)}개): " + "  ".join(parts))
 
 
+def save_to_live_eval(metrics: pd.DataFrame, eval_date: str, prediction_date: str) -> None:
+    """live_eval_daily에 전체 지표 저장 (prec@K, lift@K, Return@K, Spearman, brier, base_rate)."""
+    conn = get_conn()
+    try:
+        for _, row in metrics.iterrows():
+            if row["n_pairs"] == 0:
+                continue
+            conn.execute("""
+                INSERT OR REPLACE INTO live_eval_daily (
+                    eval_date, prediction_date, label_key,
+                    n_pairs, brier, base_rate,
+                    prec_at_5, prec_at_10, prec_at_20, prec_at_30,
+                    lift_at_5, lift_at_10, lift_at_20, lift_at_30,
+                    ret_at_5, ret_at_10, ret_at_20, ret_at_30,
+                    ret_base, spearman
+                ) VALUES (
+                    CAST(? AS DATE), CAST(? AS DATE), ?,
+                    ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?, ?, ?,
+                    ?, ?
+                )
+            """, [
+                eval_date, prediction_date, str(row["label"]),
+                row.get("n_pairs"), row.get("brier"), row.get("base_rate"),
+                row.get("prec_at_5"), row.get("prec_at_10"),
+                row.get("prec_at_20"), row.get("prec_at_30"),
+                row.get("lift_at_5"), row.get("lift_at_10"),
+                row.get("lift_at_20"), row.get("lift_at_30"),
+                row.get("ret_at_5"), row.get("ret_at_10"),
+                row.get("ret_at_20"), row.get("ret_at_30"),
+                row.get("ret_base"), row.get("spearman"),
+            ])
+        n_saved = len(metrics[metrics["n_pairs"] > 0])
+        print(f"live_eval_daily 저장 완료 (prediction_date={prediction_date}, {n_saved}라벨)")
+    finally:
+        conn.close()
+
+
+def run_evaluation(prediction_date: str, eval_date: str | None = None) -> None:
+    """단일 예측일 평가 → live_eval_daily 저장. orchestrator에서 자동 호출."""
+    if eval_date is None:
+        eval_date = date.today().isoformat()
+    df = _load_data(prediction_date, prediction_date)
+    if df.empty or df.dropna(subset=["actual"]).empty:
+        return
+    base_rates = _load_base_rates(prediction_date, prediction_date)
+    returns_df = _load_returns(prediction_date, prediction_date)
+    metrics = compute_metrics(df, base_rates, returns_df=returns_df)
+    save_to_live_eval(metrics, eval_date, prediction_date)
+
+
 def save_to_db(metrics: pd.DataFrame, eval_date: str) -> None:
     conn = get_conn()
     try:

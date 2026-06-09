@@ -378,6 +378,12 @@ class Orchestrator:
             if outcome_date:
                 n = compute_outcomes_universe(outcome_date)
                 logger.info("universe_outcomes INSERT 완료: %d행 (예측일 %s)", n, outcome_date)
+                try:
+                    from scripts.evaluate_predictions import run_evaluation
+                    run_evaluation(outcome_date)
+                    logger.info("live_eval_daily 저장 완료 (prediction_date=%s)", outcome_date)
+                except Exception:
+                    logger.exception("live_eval_daily 저장 실패 — 파이프라인 계속")
         except Exception:
             logger.exception("universe_outcomes INSERT 실패 — 파이프라인 계속")
 

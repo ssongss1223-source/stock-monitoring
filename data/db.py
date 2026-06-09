@@ -303,6 +303,30 @@ CREATE TABLE IF NOT EXISTS universe_outcomes (
     return_close DOUBLE,
     PRIMARY KEY (date, ticker, hold_days)
 );
+
+CREATE TABLE IF NOT EXISTS live_eval_daily (
+    eval_date       DATE    NOT NULL,
+    prediction_date DATE    NOT NULL,
+    label_key       VARCHAR NOT NULL,
+    PRIMARY KEY (eval_date, prediction_date, label_key),
+    n_pairs         INTEGER,
+    brier           DOUBLE,
+    base_rate       DOUBLE,
+    prec_at_5       DOUBLE,
+    prec_at_10      DOUBLE,
+    prec_at_20      DOUBLE,
+    prec_at_30      DOUBLE,
+    lift_at_5       DOUBLE,
+    lift_at_10      DOUBLE,
+    lift_at_20      DOUBLE,
+    lift_at_30      DOUBLE,
+    ret_at_5        DOUBLE,
+    ret_at_10       DOUBLE,
+    ret_at_20       DOUBLE,
+    ret_at_30       DOUBLE,
+    ret_base        DOUBLE,
+    spearman        DOUBLE
+);
 """
 
 
@@ -519,6 +543,31 @@ CREATE TABLE IF NOT EXISTS sma_backtest_v2 (
     total_trades        INTEGER,
     vs_buyhold          DOUBLE,
     PRIMARY KEY (run_id, ticker, strategy, window_start)
+);
+
+-- 라이브 예측 일별 평가 결과
+CREATE TABLE IF NOT EXISTS live_eval_daily (
+    eval_date       DATE    NOT NULL,
+    prediction_date DATE    NOT NULL,
+    label_key       VARCHAR NOT NULL,
+    PRIMARY KEY (eval_date, prediction_date, label_key),
+    n_pairs         INTEGER,
+    brier           DOUBLE,
+    base_rate       DOUBLE,
+    prec_at_5       DOUBLE,
+    prec_at_10      DOUBLE,
+    prec_at_20      DOUBLE,
+    prec_at_30      DOUBLE,
+    lift_at_5       DOUBLE,
+    lift_at_10      DOUBLE,
+    lift_at_20      DOUBLE,
+    lift_at_30      DOUBLE,
+    ret_at_5        DOUBLE,
+    ret_at_10       DOUBLE,
+    ret_at_20       DOUBLE,
+    ret_at_30       DOUBLE,
+    ret_base        DOUBLE,
+    spearman        DOUBLE
 );
 """
 
