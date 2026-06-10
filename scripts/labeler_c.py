@@ -682,22 +682,28 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str]) -> None:
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
+    def _b(v):
+        """Convert numpy.bool_ / np.bool to Python bool or None for DuckDB."""
+        if v is None:
+            return None
+        return bool(v)
+
     def _to_values(row):
         return (
             row["signal_date"], row["ticker"], row["entry_price"],
             row["return_2d"], row["return_3d"], row["return_5d"],
             row["max_drawdown_2d"], row["max_drawdown_3d"], row["max_drawdown_5d"],
-            row["label_3d_5pct_first"], row["label_3d_10pct_first_c"], row["label_3d_trend_start_atr"],
-            row["label_5d_7pct_first"], row["label_5d_10pct_first_c"], row["label_2d_5pct_first"],
-            row["label_1d_5pct_first"],
-            row["label_3d_return_top10pct"], row["label_3d_return_top20pct"],
-            row["label_5d_return_top10pct"], row["label_5d_return_top20pct"],
-            row["label_3d_market_excess_top20pct"], row["label_3d_sector_excess_top30pct"],
-            row["label_5d_market_excess_top20pct"], row["label_5d_sector_excess_top20pct"],
-            row["label_5d_dual_excess"],
-            row["label_3d_bb_upper_break"], row["label_3d_range_breakout_20d"],
-            row["label_3d_bb_squeeze_breakout"], row["label_5d_bb_squeeze_breakout"],
-            row["label_5d_range_breakout_20d"], row["label_5d_ma20_reclaim_trend"],
+            _b(row["label_3d_5pct_first"]), _b(row["label_3d_10pct_first_c"]), _b(row["label_3d_trend_start_atr"]),
+            _b(row["label_5d_7pct_first"]), _b(row["label_5d_10pct_first_c"]), _b(row["label_2d_5pct_first"]),
+            _b(row["label_1d_5pct_first"]),
+            _b(row["label_3d_return_top10pct"]), _b(row["label_3d_return_top20pct"]),
+            _b(row["label_5d_return_top10pct"]), _b(row["label_5d_return_top20pct"]),
+            _b(row["label_3d_market_excess_top20pct"]), _b(row["label_3d_sector_excess_top30pct"]),
+            _b(row["label_5d_market_excess_top20pct"]), _b(row["label_5d_sector_excess_top20pct"]),
+            _b(row["label_5d_dual_excess"]),
+            _b(row["label_3d_bb_upper_break"]), _b(row["label_3d_range_breakout_20d"]),
+            _b(row["label_3d_bb_squeeze_breakout"]), _b(row["label_5d_bb_squeeze_breakout"]),
+            _b(row["label_5d_range_breakout_20d"]), _b(row["label_5d_ma20_reclaim_trend"]),
         )
 
     # Process each date, flush every 50 dates to avoid holding all rows in memory
