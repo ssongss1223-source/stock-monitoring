@@ -666,129 +666,96 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str]) -> None:
         f"Processing {len(trading_dates)} dates from {start_date} to {end_date}"
     )
 
-    # Process each date
-    all_rows = []
+    insert_sql = """
+        INSERT OR REPLACE INTO backtest_labels_c (
+            signal_date, ticker, entry_price, return_2d, return_3d, return_5d,
+            max_drawdown_2d, max_drawdown_3d, max_drawdown_5d,
+            label_3d_5pct_first, label_3d_10pct_first_c, label_3d_trend_start_atr,
+            label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first, label_1d_5pct_first,
+            label_3d_return_top10pct, label_3d_return_top20pct,
+            label_5d_return_top10pct, label_5d_return_top20pct,
+            label_3d_market_excess_top20pct, label_3d_sector_excess_top30pct,
+            label_5d_market_excess_top20pct, label_5d_sector_excess_top20pct,
+            label_5d_dual_excess,
+            label_3d_bb_upper_break, label_3d_range_breakout_20d, label_3d_bb_squeeze_breakout,
+            label_5d_bb_squeeze_breakout, label_5d_range_breakout_20d, label_5d_ma20_reclaim_trend
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """
+
+    def _to_values(row):
+        return (
+            row["signal_date"], row["ticker"], row["entry_price"],
+            row["return_2d"], row["return_3d"], row["return_5d"],
+            row["max_drawdown_2d"], row["max_drawdown_3d"], row["max_drawdown_5d"],
+            row["label_3d_5pct_first"], row["label_3d_10pct_first_c"], row["label_3d_trend_start_atr"],
+            row["label_5d_7pct_first"], row["label_5d_10pct_first_c"], row["label_2d_5pct_first"],
+            row["label_1d_5pct_first"],
+            row["label_3d_return_top10pct"], row["label_3d_return_top20pct"],
+            row["label_5d_return_top10pct"], row["label_5d_return_top20pct"],
+            row["label_3d_market_excess_top20pct"], row["label_3d_sector_excess_top30pct"],
+            row["label_5d_market_excess_top20pct"], row["label_5d_sector_excess_top20pct"],
+            row["label_5d_dual_excess"],
+            row["label_3d_bb_upper_break"], row["label_3d_range_breakout_20d"],
+            row["label_3d_bb_squeeze_breakout"], row["label_5d_bb_squeeze_breakout"],
+            row["label_5d_range_breakout_20d"], row["label_5d_ma20_reclaim_trend"],
+        )
+
+    # Process each date, flush every 50 dates to avoid holding all rows in memory
+    total_inserted = 0
+    batch_rows = []
     for idx, signal_date in enumerate(trading_dates):
         rows = _process_date(conn, signal_date)
-        all_rows.extend(rows)
+        batch_rows.extend(rows)
 
-        if (idx + 1) % 20 == 0:
-            print(f"  Processed {idx + 1}/{len(trading_dates)} dates")
+        if (idx + 1) % 50 == 0 or (idx + 1) == len(trading_dates):
+            if batch_rows:
+                conn.executemany(insert_sql, [_to_values(r) for r in batch_rows])
+                conn.commit()
+                total_inserted += len(batch_rows)
+                batch_rows = []
+            print(f"  Processed {idx + 1}/{len(trading_dates)} dates, inserted {total_inserted} rows total")
 
-    # Batch insert
-    if all_rows:
-        insert_sql = """
-            INSERT OR REPLACE INTO backtest_labels_c (
-                signal_date, ticker, entry_price, return_2d, return_3d, return_5d,
-                max_drawdown_2d, max_drawdown_3d, max_drawdown_5d,
-                label_3d_5pct_first, label_3d_10pct_first_c, label_3d_trend_start_atr,
-                label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first, label_1d_5pct_first,
-                label_3d_return_top10pct, label_3d_return_top20pct,
-                label_5d_return_top10pct, label_5d_return_top20pct,
-                label_3d_market_excess_top20pct, label_3d_sector_excess_top30pct,
-                label_5d_market_excess_top20pct, label_5d_sector_excess_top20pct,
-                label_5d_dual_excess,
-                label_3d_bb_upper_break, label_3d_range_breakout_20d, label_3d_bb_squeeze_breakout,
-                label_5d_bb_squeeze_breakout, label_5d_range_breakout_20d, label_5d_ma20_reclaim_trend
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """
-
-        values_list = [
-            (
-                row["signal_date"],
-                row["ticker"],
-                row["entry_price"],
-                row["return_2d"],
-                row["return_3d"],
-                row["return_5d"],
-                row["max_drawdown_2d"],
-                row["max_drawdown_3d"],
-                row["max_drawdown_5d"],
-                row["label_3d_5pct_first"],
-                row["label_3d_10pct_first_c"],
-                row["label_3d_trend_start_atr"],
-                row["label_5d_7pct_first"],
-                row["label_5d_10pct_first_c"],
-                row["label_2d_5pct_first"],
-                row["label_1d_5pct_first"],
-                row["label_3d_return_top10pct"],
-                row["label_3d_return_top20pct"],
-                row["label_5d_return_top10pct"],
-                row["label_5d_return_top20pct"],
-                row["label_3d_market_excess_top20pct"],
-                row["label_3d_sector_excess_top30pct"],
-                row["label_5d_market_excess_top20pct"],
-                row["label_5d_sector_excess_top20pct"],
-                row["label_5d_dual_excess"],
-                row["label_3d_bb_upper_break"],
-                row["label_3d_range_breakout_20d"],
-                row["label_3d_bb_squeeze_breakout"],
-                row["label_5d_bb_squeeze_breakout"],
-                row["label_5d_range_breakout_20d"],
-                row["label_5d_ma20_reclaim_trend"],
-            )
-            for row in all_rows
-        ]
-
-        conn.executemany(insert_sql, values_list)
-        conn.commit()
-        print(f"Inserted {len(all_rows)} rows into backtest_labels_c")
-    else:
-        print("No rows to insert")
-
+    print(f"Done. Total inserted: {total_inserted} rows into backtest_labels_c")
     conn.close()
 
 
 def cmd_filter() -> None:
-    """Compute positive rate per label."""
+    """Compute positive rate per label (excludes NULLs from denominator)."""
     conn = get_conn()
 
+    # Build per-label expressions: positive rate = TRUE count / non-null count
+    label_exprs = ",\n            ".join(
+        f"SUM(CASE WHEN {lbl} THEN 1 ELSE 0 END) AS pos_{lbl},\n"
+        f"            COUNT({lbl}) AS cnt_{lbl}"
+        for lbl in _ALL_LABELS
+    )
     query = f"""
-        SELECT
-            COUNT(*) as total,
-            CAST(100.0 * SUM(CASE WHEN label_3d_5pct_first THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_5pct_first,
-            CAST(100.0 * SUM(CASE WHEN label_3d_10pct_first_c THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_10pct_first_c,
-            CAST(100.0 * SUM(CASE WHEN label_3d_trend_start_atr THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_trend_start_atr,
-            CAST(100.0 * SUM(CASE WHEN label_5d_7pct_first THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_7pct_first,
-            CAST(100.0 * SUM(CASE WHEN label_5d_10pct_first_c THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_10pct_first_c,
-            CAST(100.0 * SUM(CASE WHEN label_2d_5pct_first THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_2d_5pct_first,
-            CAST(100.0 * SUM(CASE WHEN label_1d_5pct_first THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_1d_5pct_first,
-            CAST(100.0 * SUM(CASE WHEN label_3d_return_top10pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_return_top10pct,
-            CAST(100.0 * SUM(CASE WHEN label_3d_return_top20pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_return_top20pct,
-            CAST(100.0 * SUM(CASE WHEN label_5d_return_top10pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_return_top10pct,
-            CAST(100.0 * SUM(CASE WHEN label_5d_return_top20pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_return_top20pct,
-            CAST(100.0 * SUM(CASE WHEN label_3d_market_excess_top20pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_market_excess_top20pct,
-            CAST(100.0 * SUM(CASE WHEN label_3d_sector_excess_top30pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_sector_excess_top30pct,
-            CAST(100.0 * SUM(CASE WHEN label_5d_market_excess_top20pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_market_excess_top20pct,
-            CAST(100.0 * SUM(CASE WHEN label_5d_sector_excess_top20pct THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_sector_excess_top20pct,
-            CAST(100.0 * SUM(CASE WHEN label_5d_dual_excess THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_dual_excess,
-            CAST(100.0 * SUM(CASE WHEN label_3d_bb_upper_break THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_bb_upper_break,
-            CAST(100.0 * SUM(CASE WHEN label_3d_range_breakout_20d THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_range_breakout_20d,
-            CAST(100.0 * SUM(CASE WHEN label_3d_bb_squeeze_breakout THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_3d_bb_squeeze_breakout,
-            CAST(100.0 * SUM(CASE WHEN label_5d_bb_squeeze_breakout THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_bb_squeeze_breakout,
-            CAST(100.0 * SUM(CASE WHEN label_5d_range_breakout_20d THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_range_breakout_20d,
-            CAST(100.0 * SUM(CASE WHEN label_5d_ma20_reclaim_trend THEN 1 ELSE 0 END) / COUNT(*) AS DECIMAL(5,2)) as label_5d_ma20_reclaim_trend
+        SELECT COUNT(*) AS total, {label_exprs}
         FROM backtest_labels_c
         WHERE signal_date >= '{_START_DEFAULT}'
     """
-
     result = conn.execute(query).fetchone()
-
-    if result:
-        print("\nLabel Positive Rates (%):")
-        print("-" * 60)
-        total = result[0]
-        print(f"Total rows: {total}")
-        print()
-
-        for i, label in enumerate(_ALL_LABELS, 1):
-            rate = result[i] if result[i] is not None else 0
-            passes = "YES" if 5 <= rate <= 45 else "NO"
-            print(f"{label:40} {rate:6.2f}% [{passes}]")
-    else:
-        print("No data in backtest_labels_c")
-
     conn.close()
+
+    if not result:
+        print("No data in backtest_labels_c")
+        return
+
+    total = result[0]
+    print(f"\nLabel Positive Rates (non-null denominator) — total rows: {total}")
+    print(f"{'Label':42} {'Rate':>7}  {'Non-null':>10}  Filter")
+    print("-" * 72)
+    col = 1
+    for lbl in _ALL_LABELS:
+        pos = result[col]
+        cnt = result[col + 1]
+        col += 2
+        if cnt and cnt > 0:
+            rate = 100.0 * pos / cnt
+            passes = "YES" if 5 <= rate <= 45 else "NO "
+            print(f"{lbl:42} {rate:6.2f}%  {cnt:>10}  {passes}")
+        else:
+            print(f"{lbl:42}      N/A  {0:>10}  ---")
 
 
 def cmd_check() -> None:
@@ -831,34 +798,23 @@ def cmd_check() -> None:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Track C label builder"
-    )
-    subparsers = parser.add_subparsers(dest="command", required=True)
-
-    # --build
-    build_parser = subparsers.add_parser("--build", help="Build labels for date range")
-    build_parser.add_argument(
-        "--start", help="Start date (YYYY-MM-DD)", default=None
-    )
-    build_parser.add_argument(
-        "--end", help="End date (YYYY-MM-DD)", default=None
-    )
-
-    # --filter
-    subparsers.add_parser("--filter", help="Compute positive rate per label")
-
-    # --check
-    subparsers.add_parser("--check", help="Print summary stats")
+    parser = argparse.ArgumentParser(description="Track C label builder")
+    parser.add_argument("--build", action="store_true", help="Build labels for date range")
+    parser.add_argument("--filter", action="store_true", help="Compute positive rate per label")
+    parser.add_argument("--check", action="store_true", help="Print summary stats")
+    parser.add_argument("--start", help="Start date for --build (YYYY-MM-DD)", default=None)
+    parser.add_argument("--end", help="End date for --build (YYYY-MM-DD)", default=None)
 
     args = parser.parse_args()
 
-    if args.command == "--build":
+    if args.build:
         cmd_build(args.start, args.end)
-    elif args.command == "--filter":
+    elif args.filter:
         cmd_filter()
-    elif args.command == "--check":
+    elif args.check:
         cmd_check()
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
