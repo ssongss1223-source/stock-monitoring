@@ -79,20 +79,14 @@ def _compute_bb_series(
     Compute rolling 20-day BB upper, lower, mid for a closes array.
     Returns (bb_upper, bb_lower, bb_mid) arrays with NaN where insufficient data.
     """
-    n = len(closes)
-    bb_upper = np.full(n, np.nan)
-    bb_lower = np.full(n, np.nan)
-    bb_mid = np.full(n, np.nan)
+    s = pd.Series(closes)
+    roll = s.rolling(window)
+    mid = roll.mean().to_numpy()
+    std = roll.std(ddof=1).to_numpy()
+    bb_upper = mid + 2 * std
+    bb_lower = mid - 2 * std
 
-    for i in range(window - 1, n):
-        w = closes[i - window + 1 : i + 1]
-        m = w.mean()
-        s = w.std(ddof=1)
-        bb_mid[i] = m
-        bb_upper[i] = m + 2 * s
-        bb_lower[i] = m - 2 * s
-
-    return bb_upper, bb_lower, bb_mid
+    return bb_upper, bb_lower, mid
 
 
 def _label_ticker(
