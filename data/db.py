@@ -327,6 +327,50 @@ CREATE TABLE IF NOT EXISTS live_eval_daily (
     ret_base        DOUBLE,
     spearman        DOUBLE
 );
+
+CREATE TABLE IF NOT EXISTS signal_history_c (
+    signal_date   DATE,
+    ticker        VARCHAR,
+    model_version VARCHAR,
+    label_probs   JSON,
+    top_labels    JSON,
+    PRIMARY KEY (signal_date, ticker, model_version)
+);
+
+CREATE TABLE IF NOT EXISTS backtest_labels_c (
+    signal_date   DATE    NOT NULL,
+    ticker        VARCHAR NOT NULL,
+    PRIMARY KEY (signal_date, ticker),
+    entry_price     DOUBLE,
+    return_2d       DOUBLE,
+    return_3d       DOUBLE,
+    return_5d       DOUBLE,
+    max_drawdown_2d DOUBLE,
+    max_drawdown_3d DOUBLE,
+    max_drawdown_5d DOUBLE,
+    label_3d_5pct_first          BOOLEAN,
+    label_3d_10pct_first_c       BOOLEAN,
+    label_3d_trend_start_atr     BOOLEAN,
+    label_5d_7pct_first          BOOLEAN,
+    label_5d_10pct_first_c       BOOLEAN,
+    label_2d_5pct_first          BOOLEAN,
+    label_1d_5pct_first          BOOLEAN,
+    label_3d_return_top10pct     BOOLEAN,
+    label_3d_return_top20pct     BOOLEAN,
+    label_5d_return_top10pct     BOOLEAN,
+    label_5d_return_top20pct     BOOLEAN,
+    label_3d_market_excess_top20pct  BOOLEAN,
+    label_3d_sector_excess_top30pct  BOOLEAN,
+    label_5d_market_excess_top20pct  BOOLEAN,
+    label_5d_sector_excess_top20pct  BOOLEAN,
+    label_5d_dual_excess             BOOLEAN,
+    label_3d_bb_upper_break          BOOLEAN,
+    label_3d_range_breakout_20d      BOOLEAN,
+    label_3d_bb_squeeze_breakout     BOOLEAN,
+    label_5d_bb_squeeze_breakout     BOOLEAN,
+    label_5d_range_breakout_20d      BOOLEAN,
+    label_5d_ma20_reclaim_trend      BOOLEAN
+);
 """
 
 
@@ -575,6 +619,7 @@ CREATE TABLE IF NOT EXISTS live_eval_daily (
 ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS prec_at_3 DOUBLE;
 ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS lift_at_3 DOUBLE;
 ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS ret_at_3  DOUBLE;
+ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS model_version VARCHAR DEFAULT 'track_b';
 """
 
 
