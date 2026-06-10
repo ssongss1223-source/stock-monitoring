@@ -395,12 +395,15 @@ def _process_date(conn, signal_date: date) -> list[dict]:
         kospi_df["date"] = pd.to_datetime(kospi_df["date"]).dt.date
     kospi_by_date = {row[0]: row[1] for row in kospi_df.itertuples(index=False)}
 
+    # Pre-index ohlcv by ticker to avoid O(N²) per-ticker filtering
+    ohlcv_by_ticker = {t: grp.reset_index(drop=True) for t, grp in ohlcv_df.groupby("ticker")}
+
     # Compute per-ticker labels
     ticker_results = {}
 
     for ticker in tickers:
-        ticker_hist = ohlcv_df[ohlcv_df["ticker"] == ticker].reset_index(drop=True)
-        if len(ticker_hist) < 1:
+        ticker_hist = ohlcv_by_ticker.get(ticker)
+        if ticker_hist is None or len(ticker_hist) < 1:
             continue
 
         atr = atr_dict.get(ticker)
