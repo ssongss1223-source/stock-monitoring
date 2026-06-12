@@ -361,6 +361,7 @@ class Orchestrator:
         _update_universe_preds(trade_date, universe_ml_probs)
 
         # universe_outcomes: 10거래일 전 예측일에 대한 raw measurement 저장
+        outcome_date = None
         try:
             from backtest.labeler import compute_outcomes_universe
             conn_r3 = get_conn(read_only=True)
@@ -378,12 +379,6 @@ class Orchestrator:
             if outcome_date:
                 n = compute_outcomes_universe(outcome_date)
                 logger.info("universe_outcomes INSERT 완료: %d행 (예측일 %s)", n, outcome_date)
-                try:
-                    from scripts.evaluate_predictions import run_evaluation
-                    run_evaluation(outcome_date)
-                    logger.info("live_eval_daily 저장 완료 (prediction_date=%s)", outcome_date)
-                except Exception:
-                    logger.exception("live_eval_daily 저장 실패 — 파이프라인 계속")
         except Exception:
             logger.exception("universe_outcomes INSERT 실패 — 파이프라인 계속")
 
@@ -391,6 +386,15 @@ class Orchestrator:
             _auto_label_universe_unlabeled()
         except Exception:
             logger.exception("_auto_label_universe_unlabeled 실패 — 파이프라인 계속")
+
+        # live_eval_daily: universe_daily 라벨이 채워진 이후에 실행해야 actual 값을 읽을 수 있음
+        if outcome_date:
+            try:
+                from scripts.evaluate_predictions import run_evaluation
+                run_evaluation(outcome_date)
+                logger.info("live_eval_daily 저장 완료 (prediction_date=%s)", outcome_date)
+            except Exception:
+                logger.exception("live_eval_daily 저장 실패 — 파이프라인 계속")
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
