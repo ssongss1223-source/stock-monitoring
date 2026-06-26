@@ -26,7 +26,7 @@ _TRAIN_START = "2023-06-07"
 
 _UD_COLS = {
     "close_to_52w_high", "bb_position", "rsi_14", "foreign_net_20d",
-    "close_to_20ma_ratio", "close_to_60ma_ratio", "close_to_5ma_ratio",
+    "ma20_ratio", "ma60_ratio", "ma5_ratio",
 }
 
 _DAILY_FEAT_COLS = [
@@ -53,7 +53,7 @@ _DAILY_FEAT_COLS = [
     "bb_width_pct_252", "turnover_rank_pct", "amount_rank_pct", "volatility_rank_pct",
     # universe_daily (7)
     "close_to_52w_high", "bb_position", "rsi_14", "foreign_net_20d",
-    "close_to_20ma_ratio", "close_to_60ma_ratio", "close_to_5ma_ratio",
+    "ma20_ratio", "ma60_ratio", "ma5_ratio",
 ]
 
 # ohlcv_daily에서 새로 파생하는 16개 추가 피처
