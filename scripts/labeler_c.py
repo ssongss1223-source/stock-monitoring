@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Track C label builder — computes 22 label candidates for backtest_labels_c table.
+Track C label builder — computes 14 label candidates for backtest_labels_c table.
 
 Usage:
   python scripts/labeler_c.py --build [--start YYYY-MM-DD] [--end YYYY-MM-DD]
@@ -31,21 +31,15 @@ _ALL_LABELS = [
     "label_5d_10pct_first_c",
     "label_2d_5pct_first",
     "label_1d_5pct_first",
-    "label_3d_return_top10pct",
-    "label_3d_return_top20pct",
-    "label_5d_return_top10pct",
-    "label_5d_return_top20pct",
-    "label_3d_market_excess_top20pct",
     "label_3d_sector_excess_top30pct",
-    "label_5d_market_excess_top20pct",
     "label_5d_sector_excess_top20pct",
-    "label_5d_dual_excess",
     "label_3d_bb_upper_break",
     "label_3d_range_breakout_20d",
     "label_3d_bb_squeeze_breakout",
     "label_5d_bb_squeeze_breakout",
     "label_5d_range_breakout_20d",
-    "label_5d_ma20_reclaim_trend",
+    "label_3d_recover_pullback",
+    "label_2d_volume_surge_5pct",
 ]
 
 
@@ -98,7 +92,7 @@ def _label_ticker(
     Compute all per-ticker labels and metrics.
 
     Args:
-        ticker_hist: DataFrame with [date, open, high, low, close] sorted by date
+        ticker_hist: DataFrame with [date, open, high, low, close, volume] sorted by date
         signal_date: the label signal date
         atr: ATR value from universe_features_daily.atr_14 (or None)
 
@@ -282,43 +276,34 @@ def _label_ticker(
         result["label_3d_range_breakout_20d"] = None
         result["label_5d_range_breakout_20d"] = None
 
-    # MA20 reclaim trend (5d)
-    if len(past_closes) >= 20 and len(future_closes) >= 5:
-        ma20_today = past_closes[-20:].mean()
-        close_today = past_closes[-1]
-        near_ma20 = abs(close_today / ma20_today - 1) <= 0.03
-
-        # MA20 at T+5: mean of closes from T-14 to T+5 (20 days)
-        # T-14 is past_closes[-14], T+5 is future_closes[4]
-        if len(past_closes) >= 14:
-            ma20_at_t5 = (
-                np.concatenate([past_closes[-14:], future_closes[:6]]).mean()
-            )
-            return_5d_val = result["return_5d"]
-            result["label_5d_ma20_reclaim_trend"] = (
-                True
-                if near_ma20 and future_closes[4] > ma20_at_t5 and return_5d_val > 0
-                else (
-                    False
-                    if near_ma20
-                    else None
-                )
+    # Pullback recovery: prior 5d return <= -5%, then +5% in 3d
+    if len(past_closes) >= 6:
+        ret_5d_prior = past_closes[-1] / past_closes[-6] - 1
+        if ret_5d_prior <= -0.05:
+            result["label_3d_recover_pullback"] = _label_first_to_hit(
+                future_closes[:3].tolist(), entry_price, 0.05, 0.035
             )
         else:
-            result["label_5d_ma20_reclaim_trend"] = None
+            result["label_3d_recover_pullback"] = None
     else:
-        result["label_5d_ma20_reclaim_trend"] = None
+        result["label_3d_recover_pullback"] = None
 
-    # Cross-sectional and excess labels computed later (placeholder None)
-    result["label_3d_return_top10pct"] = None
-    result["label_3d_return_top20pct"] = None
-    result["label_5d_return_top10pct"] = None
-    result["label_5d_return_top20pct"] = None
-    result["label_3d_market_excess_top20pct"] = None
+    # Volume surge (20일 평균 대비 2배 이상) + 2일 내 +5%
+    past_volumes = past["volume"].values
+    if len(past_volumes) >= 21:
+        avg_vol_20d = past_volumes[-21:-1].mean()
+        if avg_vol_20d > 0 and past_volumes[-1] >= 2 * avg_vol_20d:
+            result["label_2d_volume_surge_5pct"] = _label_first_to_hit(
+                future_closes[:2].tolist(), entry_price, 0.05, 0.025
+            )
+        else:
+            result["label_2d_volume_surge_5pct"] = None
+    else:
+        result["label_2d_volume_surge_5pct"] = None
+
+    # Cross-sectional excess labels computed later (placeholder None)
     result["label_3d_sector_excess_top30pct"] = None
-    result["label_5d_market_excess_top20pct"] = None
     result["label_5d_sector_excess_top20pct"] = None
-    result["label_5d_dual_excess"] = None
 
     return result
 
@@ -348,7 +333,7 @@ def _process_date(conn, signal_date: date) -> list[dict]:
     lookahead_date = (signal_date + timedelta(days=7)).isoformat()
 
     ohlcv_query = f"""
-        SELECT ticker, date, open, high, low, close
+        SELECT ticker, date, open, high, low, close, volume
         FROM ohlcv_daily
         WHERE date >= '{lookback_date}' AND date <= '{lookahead_date}'
         ORDER BY ticker, date
@@ -377,18 +362,6 @@ def _process_date(conn, signal_date: date) -> list[dict]:
     sector_rows = conn.execute(sector_query).fetchall()
     sector_dict = {row[0]: row[1] for row in sector_rows}
 
-    # Load KOSPI data for market excess
-    kospi_query = f"""
-        SELECT date, close
-        FROM market_index
-        WHERE ticker = '1001' AND date >= '{signal_date_str}' AND date <= '{lookahead_date}'
-        ORDER BY date
-    """
-    kospi_df = conn.execute(kospi_query).df()
-    if not kospi_df.empty:
-        kospi_df["date"] = pd.to_datetime(kospi_df["date"]).dt.date
-    kospi_by_date = {row[0]: row[1] for row in kospi_df.itertuples(index=False)}
-
     # Pre-index ohlcv by ticker to avoid O(N²) per-ticker filtering
     ohlcv_by_ticker = {t: grp.reset_index(drop=True) for t, grp in ohlcv_df.groupby("ticker")}
 
@@ -403,117 +376,6 @@ def _process_date(conn, signal_date: date) -> list[dict]:
         atr = atr_dict.get(ticker)
         result = _label_ticker(ticker_hist, signal_date, atr)
         ticker_results[ticker] = result
-
-    # Compute cross-sectional rank labels (return_3d, return_5d)
-    returns_3d = [
-        r["return_3d"]
-        for r in ticker_results.values()
-        if r["return_3d"] is not None
-    ]
-    returns_5d = [
-        r["return_5d"]
-        for r in ticker_results.values()
-        if r["return_5d"] is not None
-    ]
-
-    if returns_3d:
-        p90_3d = np.percentile(returns_3d, 90)
-        p80_3d = np.percentile(returns_3d, 80)
-    else:
-        p90_3d = p80_3d = None
-
-    if returns_5d:
-        p90_5d = np.percentile(returns_5d, 90)
-        p80_5d = np.percentile(returns_5d, 80)
-    else:
-        p90_5d = p80_5d = None
-
-    for ticker, result in ticker_results.items():
-        if result["return_3d"] is not None and p90_3d is not None:
-            result["label_3d_return_top10pct"] = result["return_3d"] >= p90_3d
-            result["label_3d_return_top20pct"] = result["return_3d"] >= p80_3d
-        if result["return_5d"] is not None and p90_5d is not None:
-            result["label_5d_return_top10pct"] = result["return_5d"] >= p90_5d
-            result["label_5d_return_top20pct"] = result["return_5d"] >= p80_5d
-
-    # Compute market excess labels
-    # KOSPI return: base = close at signal_date, T+3 = 3rd future close, T+5 = 5th future close
-    kospi_base = kospi_by_date.get(signal_date)
-
-    # Find T+3 and T+5 dates (3 and 5 trading days after signal_date)
-    if kospi_base:
-        kospi_closes_after = sorted(
-            [d for d in kospi_by_date.keys() if d > signal_date]
-        )
-
-        if len(kospi_closes_after) >= 3:
-            kospi_t3_close = kospi_by_date[kospi_closes_after[2]]
-            kospi_ret_3d = (kospi_t3_close - kospi_base) / kospi_base
-        else:
-            kospi_ret_3d = None
-
-        if len(kospi_closes_after) >= 5:
-            kospi_t5_close = kospi_by_date[kospi_closes_after[4]]
-            kospi_ret_5d = (kospi_t5_close - kospi_base) / kospi_base
-        else:
-            kospi_ret_5d = None
-
-        # Compute excess returns
-        excess_3d = []
-        excess_5d = []
-        for ticker, result in ticker_results.items():
-            if kospi_ret_3d is not None and result["return_3d"] is not None:
-                excess_3d.append(result["return_3d"] - kospi_ret_3d)
-            if kospi_ret_5d is not None and result["return_5d"] is not None:
-                excess_5d.append(result["return_5d"] - kospi_ret_5d)
-
-        if excess_3d:
-            p80_excess_3d = np.percentile(excess_3d, 80)
-        else:
-            p80_excess_3d = None
-
-        if excess_5d:
-            p80_excess_5d = np.percentile(excess_5d, 80)
-        else:
-            p80_excess_5d = None
-
-        # Apply market excess labels
-        for ticker, result in ticker_results.items():
-            if (
-                kospi_ret_3d is not None
-                and result["return_3d"] is not None
-                and p80_excess_3d is not None
-            ):
-                exc_3d = result["return_3d"] - kospi_ret_3d
-                result["label_3d_market_excess_top20pct"] = exc_3d >= p80_excess_3d
-
-            if (
-                kospi_ret_5d is not None
-                and result["return_5d"] is not None
-                and p80_excess_5d is not None
-            ):
-                exc_5d = result["return_5d"] - kospi_ret_5d
-                result["label_5d_market_excess_top20pct"] = exc_5d >= p80_excess_5d
-
-            # Dual excess (both, not percentile)
-            if (
-                kospi_ret_5d is not None
-                and result["return_5d"] is not None
-                and result["return_5d"] > kospi_ret_5d
-            ):
-                sector = sector_dict.get(ticker)
-                # Compute sector avg for this date/sector
-                sector_returns_5d = [
-                    r["return_5d"]
-                    for t, r in ticker_results.items()
-                    if sector_dict.get(t) == sector and r["return_5d"] is not None
-                ]
-                if sector_returns_5d:
-                    sector_avg_5d = np.mean(sector_returns_5d)
-                    result["label_5d_dual_excess"] = (
-                        result["return_5d"] > kospi_ret_5d
-                        and result["return_5d"] > sector_avg_5d
-                    )
 
     # Compute sector excess labels
     for ticker, result in ticker_results.items():
@@ -669,14 +531,12 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str]) -> None:
             max_drawdown_2d, max_drawdown_3d, max_drawdown_5d,
             label_3d_5pct_first, label_3d_10pct_first_c, label_3d_trend_start_atr,
             label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first, label_1d_5pct_first,
-            label_3d_return_top10pct, label_3d_return_top20pct,
-            label_5d_return_top10pct, label_5d_return_top20pct,
-            label_3d_market_excess_top20pct, label_3d_sector_excess_top30pct,
-            label_5d_market_excess_top20pct, label_5d_sector_excess_top20pct,
-            label_5d_dual_excess,
-            label_3d_bb_upper_break, label_3d_range_breakout_20d, label_3d_bb_squeeze_breakout,
-            label_5d_bb_squeeze_breakout, label_5d_range_breakout_20d, label_5d_ma20_reclaim_trend
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            label_3d_sector_excess_top30pct, label_5d_sector_excess_top20pct,
+            label_3d_bb_upper_break, label_3d_range_breakout_20d,
+            label_3d_bb_squeeze_breakout, label_5d_bb_squeeze_breakout,
+            label_5d_range_breakout_20d,
+            label_3d_recover_pullback, label_2d_volume_surge_5pct
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """
 
     def _b(v):
@@ -693,14 +553,11 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str]) -> None:
             _b(row["label_3d_5pct_first"]), _b(row["label_3d_10pct_first_c"]), _b(row["label_3d_trend_start_atr"]),
             _b(row["label_5d_7pct_first"]), _b(row["label_5d_10pct_first_c"]), _b(row["label_2d_5pct_first"]),
             _b(row["label_1d_5pct_first"]),
-            _b(row["label_3d_return_top10pct"]), _b(row["label_3d_return_top20pct"]),
-            _b(row["label_5d_return_top10pct"]), _b(row["label_5d_return_top20pct"]),
-            _b(row["label_3d_market_excess_top20pct"]), _b(row["label_3d_sector_excess_top30pct"]),
-            _b(row["label_5d_market_excess_top20pct"]), _b(row["label_5d_sector_excess_top20pct"]),
-            _b(row["label_5d_dual_excess"]),
+            _b(row["label_3d_sector_excess_top30pct"]), _b(row["label_5d_sector_excess_top20pct"]),
             _b(row["label_3d_bb_upper_break"]), _b(row["label_3d_range_breakout_20d"]),
             _b(row["label_3d_bb_squeeze_breakout"]), _b(row["label_5d_bb_squeeze_breakout"]),
-            _b(row["label_5d_range_breakout_20d"]), _b(row["label_5d_ma20_reclaim_trend"]),
+            _b(row["label_5d_range_breakout_20d"]),
+            _b(row["label_3d_recover_pullback"]), _b(row["label_2d_volume_surge_5pct"]),
         )
 
     # Process each date, flush every 50 dates to avoid holding all rows in memory

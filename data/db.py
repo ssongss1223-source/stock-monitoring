@@ -369,7 +369,9 @@ CREATE TABLE IF NOT EXISTS backtest_labels_c (
     label_3d_bb_squeeze_breakout     BOOLEAN,
     label_5d_bb_squeeze_breakout     BOOLEAN,
     label_5d_range_breakout_20d      BOOLEAN,
-    label_5d_ma20_reclaim_trend      BOOLEAN
+    label_5d_ma20_reclaim_trend      BOOLEAN,
+    label_3d_recover_pullback        BOOLEAN,
+    label_2d_volume_surge_5pct       BOOLEAN
 );
 """
 
@@ -620,6 +622,8 @@ ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS prec_at_3 DOUBLE;
 ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS lift_at_3 DOUBLE;
 ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS ret_at_3  DOUBLE;
 ALTER TABLE live_eval_daily ADD COLUMN IF NOT EXISTS model_version VARCHAR DEFAULT 'track_b';
+ALTER TABLE backtest_labels_c ADD COLUMN IF NOT EXISTS label_3d_recover_pullback  BOOLEAN;
+ALTER TABLE backtest_labels_c ADD COLUMN IF NOT EXISTS label_2d_volume_surge_5pct BOOLEAN;
 """
 
 

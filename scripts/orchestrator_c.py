@@ -27,6 +27,7 @@ from data.db import get_conn
 from scripts.feature_engineering_c import (
     _DAILY_FEAT_COLS,
     _UD_COLS,
+    add_rank_features,
     compute_extra_daily_features,
     compute_intraday_features,
 )
@@ -104,6 +105,9 @@ def _build_feature_df(date_str: str) -> pd.DataFrame:
     # rs_acceleration = rs_20d - rs_60d
     if "rs_20d" in df.columns and "rs_60d" in df.columns:
         df["rs_acceleration"] = df["rs_20d"] - df["rs_60d"]
+
+    # 크로스섹셔널 순위 피처 (단일 날짜 — 전체 df가 하나의 날짜)
+    df = add_rank_features(df, date_col=None)
 
     return df
 

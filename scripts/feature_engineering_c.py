@@ -1,10 +1,11 @@
 """
-Track C 피처 엔지니어링 — 71개 일봉 + 15개 intraday → data/fm_c.parquet
+Track C 피처 엔지니어링 — 71개 일봉 + 15개 intraday + 3개 크로스섹셔널 → data/fm_c.parquet
 
 Features:
     _DAILY_FEAT_COLS  (55): universe_features_daily + universe_daily 기존 피처
     _DAILY_EXTRA_COLS (16): ohlcv_daily 추가 파생 피처 (MACD, Stoch, CMF 등)
     _INTRADAY_FEAT_COLS (15): ohlcv_min 60분봉 집계 피처
+    _RANK_FEAT_COLS    (3): 날짜 내 크로스섹셔널 순위 피처 (rsi/volume/return 백분위)
 
 Usage:
     python scripts/feature_engineering_c.py --mode train [--output data/fm_c.parquet]
@@ -74,6 +75,33 @@ _DAILY_EXTRA_COLS = [
     # 연속성
     "consecutive_up_days_10d",
 ]
+
+_RANK_FEAT_COLS = ["rsi_rank_pct", "vol_5d_rank_pct", "ret_5d_rank_pct"]
+
+# 소스 컬럼 → 순위 컬럼 매핑
+_RANK_SOURCES = {
+    "rsi_rank_pct": "rsi_14",
+    "vol_5d_rank_pct": "volume_zscore_20d",
+    "ret_5d_rank_pct": "ma5_ratio",
+}
+
+
+def add_rank_features(df: pd.DataFrame, date_col: str | None = "signal_date") -> pd.DataFrame:
+    """날짜 내 크로스섹셔널 순위 피처(0~1 백분위) 추가.
+
+    date_col=None: 전체 df를 단일 그룹으로 처리 (일일 추론 단일 날짜 모드).
+    """
+    df = df.copy()
+    for new_col, src_col in _RANK_SOURCES.items():
+        if src_col not in df.columns:
+            df[new_col] = np.nan
+            continue
+        if date_col and date_col in df.columns:
+            df[new_col] = df.groupby(date_col)[src_col].rank(pct=True)
+        else:
+            df[new_col] = df[src_col].rank(pct=True)
+    return df
+
 
 _INTRADAY_FEAT_COLS = [
     "vwap_close_ratio",
@@ -422,6 +450,9 @@ def build_fm_c(output_path: str = _DEFAULT_OUTPUT) -> pd.DataFrame:
     # rs_acceleration = rs_20d - rs_60d
     if "rs_20d" in df.columns and "rs_60d" in df.columns:
         df["rs_acceleration"] = df["rs_20d"] - df["rs_60d"]
+
+    # 크로스섹셔널 순위 피처 (signal_date 그룹 내 백분위)
+    df = add_rank_features(df, date_col="signal_date")
 
     Path(output_path).parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(output_path, index=False)
