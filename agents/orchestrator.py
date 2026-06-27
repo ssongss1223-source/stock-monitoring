@@ -402,6 +402,10 @@ class Orchestrator:
             run_daily_c(trade_date)
         except Exception:
             logger.exception("Track C 추론 실패 — 파이프라인 계속")
+        try:
+            await self.report_agent.send_track_c_report(trade_date)
+        except Exception:
+            logger.exception("Track C 알림 발송 실패 — 파이프라인 계속")
 
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task

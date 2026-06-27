@@ -1,4 +1,6 @@
+import json
 import logging
+from pathlib import Path
 from typing import Optional
 
 import requests
@@ -110,6 +112,13 @@ class ReportAgent:
     def __init__(self):
         self.token = config.TELEGRAM_BOT_TOKEN
         self.chat_id = config.TELEGRAM_CHAT_ID
+
+    async def send_track_c_report(self, date_str: str) -> bool:
+        section = build_track_c_section(date_str)
+        if not section:
+            return True
+        logger.info("ReportAgent: Track C 신호 발송")
+        return self._send_chunk(section)
 
     async def send_collect_report(
         self,
@@ -517,3 +526,106 @@ def _split(text: str, limit: int) -> list[str]:
     if current:
         chunks.append(current)
     return chunks
+
+
+# ── Track C ───────────────────────────────────────────────────────────────────
+
+_C_LABEL_DISPLAY = {
+    "label_3d_5pct_first": "3일+5%",
+    "label_3d_10pct_first_c": "3일+10%",
+    "label_3d_trend_start_atr": "3일추세시작",
+    "label_5d_7pct_first": "5일+7%",
+    "label_5d_10pct_first_c": "5일+10%",
+    "label_2d_5pct_first": "2일+5%",
+    "label_1d_5pct_first": "1일+5%",
+    "label_3d_sector_excess_top30pct": "3일섹터상위30%",
+    "label_5d_sector_excess_top20pct": "5일섹터상위20%",
+    "label_3d_bb_upper_break": "BB상단돌파",
+    "label_3d_range_breakout_20d": "20일박스3d",
+    "label_3d_bb_squeeze_breakout": "BB수렴돌파3d",
+    "label_5d_bb_squeeze_breakout": "BB수렴돌파5d",
+    "label_5d_range_breakout_20d": "20일박스5d",
+    "label_3d_recover_pullback": "눌림목회복",
+    "label_2d_volume_surge_5pct": "거래량급증+5%",
+}
+
+_C_MODEL_RESULTS_PATH = Path("data/model_results_c.json")
+_C_TOP_N = 10
+
+
+def _load_c_auc_weights() -> dict[str, float]:
+    """model_results_c.json에서 label별 AUC 가중치 로드. soft_auc 우선, 없으면 xgb/lgbm/et 평균."""
+    try:
+        with open(_C_MODEL_RESULTS_PATH, encoding="utf-8") as f:
+            results = json.load(f)
+        weights = {}
+        for row in results:
+            label = row.get("target", "")
+            if not label:
+                continue
+            auc = row.get("soft_auc")
+            if auc is None:
+                vals = [row[k] for k in ("xgb_auc", "lgbm_auc", "et_auc") if row.get(k)]
+                auc = sum(vals) / len(vals) if vals else None
+            if auc:
+                weights[label] = float(auc)
+        return weights
+    except Exception:
+        return {}
+
+
+def _c_composite_score(label_probs: dict[str, float], auc_weights: dict[str, float]) -> float:
+    """AUC-가중 확률 합산. 각 라벨의 prob × AUC 합계."""
+    return sum(prob * auc_weights.get(label, 0.5) for label, prob in label_probs.items())
+
+
+def _c_ticker_name(ticker: str) -> str:
+    try:
+        from pykrx import stock
+        return stock.get_market_ticker_name(ticker) or ticker
+    except Exception:
+        return ticker
+
+
+def build_track_c_section(date_str: str, top_n: int = _C_TOP_N) -> str:
+    """signal_history_c → 종합점수 Top-N 텔레그램 섹션 생성."""
+    conn = get_conn(read_only=True)
+    try:
+        rows = conn.execute(
+            "SELECT ticker, label_probs FROM signal_history_c WHERE signal_date = CAST(? AS DATE)",
+            [date_str],
+        ).fetchall()
+    except Exception as e:
+        logger.warning("signal_history_c 조회 실패: %s", e)
+        return ""
+    finally:
+        conn.close()
+
+    if not rows:
+        return f"🤖 <b>Track C — {date_str} 신호 없음</b>"
+
+    auc_weights = _load_c_auc_weights()
+
+    scored: list[tuple[str, float, dict]] = []
+    for ticker, label_probs_raw in rows:
+        try:
+            lp = json.loads(label_probs_raw) if isinstance(label_probs_raw, str) else label_probs_raw
+        except Exception:
+            continue
+        scored.append((ticker, _c_composite_score(lp, auc_weights), lp))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    top = scored[:top_n]
+
+    lines = [
+        f"🤖 <b>Track C 신호 — {date_str}</b>  ({len(scored)}종목 중 상위 {len(top)}개)"
+    ]
+    for rank, (ticker, score, lp) in enumerate(top, 1):
+        name = _c_ticker_name(ticker)
+        top3 = sorted(lp.items(), key=lambda x: x[1], reverse=True)[:3]
+        label_str = "  ".join(
+            f"{_C_LABEL_DISPLAY.get(lbl, lbl)} {p:.0%}" for lbl, p in top3
+        )
+        lines.append(f"\n{rank}. <b>{name} ({ticker})</b>  점수 {score:.3f}\n   {label_str}")
+
+    return "\n".join(lines)
