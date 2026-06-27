@@ -321,9 +321,14 @@ def main() -> None:
 
         y = df[target]
 
+        pos_rate = float(y.mean())
         print(f"{'='*62}")
-        print(f"  {target}  (positive={y.mean():.1%})")
+        print(f"  {target}  (positive={pos_rate:.1%})")
         print(f"{'='*62}")
+
+        if pos_rate == 0.0 or pos_rate == 1.0:
+            print(f"  ⚠ 단일 클래스 라벨 — 스킵 (학습 불가)")
+            continue
 
         row: dict = {"target": target}
         model_oofs: dict[str, np.ndarray] = {}
