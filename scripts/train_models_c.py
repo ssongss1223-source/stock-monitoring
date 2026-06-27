@@ -249,6 +249,11 @@ def main() -> None:
     df["signal_date"] = pd.to_datetime(df["signal_date"])
     df = df.sort_values("signal_date").reset_index(drop=True)
 
+    # pd.NA(nullable boolean/integer) → int (XGBoost/sklearn 호환)
+    for t in _TARGETS:
+        if t in df.columns:
+            df[t] = df[t].astype("float64").fillna(0).astype("int8")
+
     fcols = _feature_cols(df)
     X = df[fcols]
     df_cols = set(df.columns)
