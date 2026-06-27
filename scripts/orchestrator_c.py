@@ -72,9 +72,10 @@ def _build_feature_df(date_str: str) -> pd.DataFrame:
 
         # 2. 16 extra daily 피처 (rolling 350d 필요 → start_date=date_str 전달)
         df_extra_all = compute_extra_daily_features(conn, date_str)
-        df_extra = df_extra_all[
-            df_extra_all["date"] == pd.Timestamp(date_str)
-        ].drop(columns=["date"]).reset_index(drop=True)
+        mask_extra = df_extra_all["date"].astype(str).str[:10] == date_str
+        df_extra = df_extra_all[mask_extra].drop(
+            columns=["date"]
+        ).reset_index(drop=True)
 
         # 3. 15 intraday 피처
         df_min = conn.execute("""
@@ -87,9 +88,11 @@ def _build_feature_df(date_str: str) -> pd.DataFrame:
 
     df_intraday_all = compute_intraday_features(df_min)
     if not df_intraday_all.empty:
-        df_intraday = df_intraday_all[
-            df_intraday_all["date"] == pd.Timestamp(date_str).date()
-        ].drop(columns=["date"], errors="ignore").reset_index(drop=True)
+        # date 컬럼 타입(datetime64 or object)에 무관하게 문자열로 비교
+        mask = df_intraday_all["date"].astype(str).str[:10] == date_str
+        df_intraday = df_intraday_all[mask].drop(
+            columns=["date"], errors="ignore"
+        ).reset_index(drop=True)
     else:
         df_intraday = pd.DataFrame()
 
