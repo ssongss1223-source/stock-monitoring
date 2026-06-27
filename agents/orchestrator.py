@@ -396,6 +396,13 @@ class Orchestrator:
             except Exception:
                 logger.exception("live_eval_daily 저장 실패 — 파이프라인 계속")
 
+        # Track C 일일 추론 (signal_history_c 저장)
+        try:
+            from scripts.orchestrator_c import run_daily_c
+            run_daily_c(trade_date)
+        except Exception:
+            logger.exception("Track C 추론 실패 — 파이프라인 계속")
+
         # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
         sell_signals = await sell_task
         rule_signals = [s for s in buy_signals if s.risk_reward >= 2.0]
