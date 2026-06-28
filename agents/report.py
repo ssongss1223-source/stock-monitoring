@@ -553,8 +553,9 @@ _C_MODEL_RESULTS_PATH = Path("data/model_results_c.json")
 _C_TOP_N = 10
 
 
-def _load_c_auc_weights() -> dict[str, float]:
-    """model_results_c.json에서 label별 AUC 가중치 로드. soft_auc 우선, 없으면 xgb/lgbm/et 평균."""
+def _load_c_weights() -> dict[str, float]:
+    """model_results_c.json → weight = soft_auc × soft_prec@20.
+    AUC < 0.65이거나 ret@10 < 0인 라벨 자동 제외."""
     try:
         with open(_C_MODEL_RESULTS_PATH, encoding="utf-8") as f:
             results = json.load(f)
@@ -564,19 +565,23 @@ def _load_c_auc_weights() -> dict[str, float]:
             if not label:
                 continue
             auc = row.get("soft_auc")
-            if auc is None:
-                vals = [row[k] for k in ("xgb_auc", "lgbm_auc", "et_auc") if row.get(k)]
-                auc = sum(vals) / len(vals) if vals else None
-            if auc:
-                weights[label] = float(auc)
+            prec20 = row.get("soft_prec@20")
+            ret10 = row.get("soft_ret@10")
+            if auc is None or prec20 is None:
+                continue
+            if auc < 0.65:
+                continue
+            if ret10 is not None and ret10 == ret10 and ret10 < 0:
+                continue
+            weights[label] = float(auc) * float(prec20)
         return weights
     except Exception:
         return {}
 
 
-def _c_composite_score(label_probs: dict[str, float], auc_weights: dict[str, float]) -> float:
-    """AUC-가중 확률 합산. 각 라벨의 prob × AUC 합계."""
-    return sum(prob * auc_weights.get(label, 0.5) for label, prob in label_probs.items())
+def _c_composite_score(label_probs: dict[str, float], weights: dict[str, float]) -> float:
+    """AUC×prec@20 가중 확률 합산. 유효 라벨(weights에 포함된)만 계산."""
+    return sum(prob * weights[label] for label, prob in label_probs.items() if label in weights)
 
 
 def _c_ticker_name(ticker: str) -> str:
@@ -604,7 +609,7 @@ def build_track_c_section(date_str: str, top_n: int = _C_TOP_N) -> str:
     if not rows:
         return f"🤖 <b>Track C — {date_str} 신호 없음</b>"
 
-    auc_weights = _load_c_auc_weights()
+    weights = _load_c_weights()
 
     scored: list[tuple[str, float, dict]] = []
     for ticker, label_probs_raw in rows:
@@ -612,19 +617,24 @@ def build_track_c_section(date_str: str, top_n: int = _C_TOP_N) -> str:
             lp = json.loads(label_probs_raw) if isinstance(label_probs_raw, str) else label_probs_raw
         except Exception:
             continue
-        scored.append((ticker, _c_composite_score(lp, auc_weights), lp))
+        scored.append((ticker, _c_composite_score(lp, weights), lp))
 
     scored.sort(key=lambda x: x[1], reverse=True)
     top = scored[:top_n]
 
     lines = [
-        f"🤖 <b>Track C 신호 — {date_str}</b>  ({len(scored)}종목 중 상위 {len(top)}개)"
+        f"🤖 <b>Track C 신호 — {date_str}</b>"
+        f"  (유효라벨 {len(weights)}개 · {len(scored)}종목 중 상위 {len(top)}개)"
     ]
     for rank, (ticker, score, lp) in enumerate(top, 1):
         name = _c_ticker_name(ticker)
-        top3 = sorted(lp.items(), key=lambda x: x[1], reverse=True)[:3]
+        valid_labels = sorted(
+            [(lbl, p) for lbl, p in lp.items() if lbl in weights],
+            key=lambda x: x[1],
+            reverse=True,
+        )[:3]
         label_str = "  ".join(
-            f"{_C_LABEL_DISPLAY.get(lbl, lbl)} {p:.0%}" for lbl, p in top3
+            f"{_C_LABEL_DISPLAY.get(lbl, lbl)} {p:.0%}" for lbl, p in valid_labels
         )
         lines.append(f"\n{rank}. <b>{name} ({ticker})</b>  점수 {score:.3f}\n   {label_str}")
 

@@ -116,7 +116,7 @@ def _return_at_k(ret_col: pd.Series, oof: np.ndarray, k: int) -> float:
     r_v = np.asarray(ret_col)[valid]
     p_v = oof[valid]
     top_k = np.argsort(p_v)[-k:]
-    return float(r_v[top_k].mean())
+    return float(np.nanmean(r_v[top_k]))
 
 
 def _auc_from_oof(y_true: pd.Series, oof: np.ndarray) -> float:
@@ -131,7 +131,7 @@ def _brier_from_oof(y_true: pd.Series, oof: np.ndarray) -> float:
 
 def _return_col_for_label(label_key: str, df_cols: set) -> str | None:
     """라벨명에서 보유 기간을 추출해 return_{period} 컬럼을 반환."""
-    for period in ("5d", "3d", "2d"):
+    for period in ("5d", "3d", "2d", "1d"):
         if label_key.startswith(period):
             col = f"return_{period}"
             return col if col in df_cols else None
