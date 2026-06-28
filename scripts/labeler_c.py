@@ -189,24 +189,28 @@ def _label_ticker(
     # ── Group 2: Technical breakout labels ──
 
     # BB upper break (3d, 5d)
-    if len(past_closes) >= 20:
-        _, _, bb_mid = _compute_bb_series(past_closes)
-        # Get last 20 closes
-        last_20_closes = past_closes[-20:]
-        bb_mid_today = last_20_closes.mean()
-        bb_std = last_20_closes.std(ddof=1)
-        bb_upper_today = bb_mid_today + 2 * bb_std
+    # BB 상단을 오늘 종가 제외한 직전 20일 기준으로 계산.
+    # 오늘 이미 BB 상단을 넘은 종목은 NULL — "돌파 전 → 돌파" 케이스만 의미있음.
+    past_excl = past_closes[:-1]  # 오늘 종가 제외
+    if len(past_excl) >= 20:
+        last_20_excl = past_excl[-20:]
+        bb_upper_prev = last_20_excl.mean() + 2 * last_20_excl.std(ddof=1)
+        today_close = past_closes[-1]
 
-        result["label_3d_bb_upper_break"] = (
-            True
-            if len(future_closes) >= 3 and np.max(future_closes[:3]) > bb_upper_today
-            else (False if len(future_closes) >= 3 else None)
-        )
-        result["label_5d_bb_upper_break"] = (
-            True
-            if len(future_closes) >= 5 and np.max(future_closes[:5]) > bb_upper_today
-            else (False if len(future_closes) >= 5 else None)
-        )
+        if today_close >= bb_upper_prev:
+            result["label_3d_bb_upper_break"] = None
+            result["label_5d_bb_upper_break"] = None
+        else:
+            result["label_3d_bb_upper_break"] = (
+                True
+                if len(future_closes) >= 3 and np.max(future_closes[:3]) > bb_upper_prev
+                else (False if len(future_closes) >= 3 else None)
+            )
+            result["label_5d_bb_upper_break"] = (
+                True
+                if len(future_closes) >= 5 and np.max(future_closes[:5]) > bb_upper_prev
+                else (False if len(future_closes) >= 5 else None)
+            )
     else:
         result["label_3d_bb_upper_break"] = None
         result["label_5d_bb_upper_break"] = None
