@@ -494,8 +494,14 @@ def _process_date(conn, signal_date: date) -> list[dict]:
     return rows
 
 
-def cmd_build(start_str: Optional[str], end_str: Optional[str]) -> None:
-    """Build labels for date range."""
+def cmd_build(start_str: Optional[str], end_str: Optional[str], target_labels: Optional[list] = None) -> None:
+    """Build labels for date range. If target_labels given, UPDATE those columns only."""
+    if target_labels:
+        invalid = [l for l in target_labels if l not in _ALL_LABELS]
+        if invalid:
+            print(f"Unknown labels: {invalid}\nValid: {_ALL_LABELS}")
+            return
+
     conn = get_conn()
 
     # Determine date range
@@ -529,55 +535,77 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str]) -> None:
         f"Processing {len(trading_dates)} dates from {start_date} to {end_date}"
     )
 
-    insert_sql = """
-        INSERT OR REPLACE INTO backtest_labels_c (
-            signal_date, ticker, entry_price, return_2d, return_3d, return_5d,
-            max_drawdown_2d, max_drawdown_3d, max_drawdown_5d,
-            label_3d_5pct_first, label_3d_10pct_first_c, label_3d_trend_start_atr,
-            label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first, label_1d_5pct_first,
-            label_3d_sector_excess_top30pct, label_5d_sector_excess_top20pct,
-            label_3d_bb_upper_break, label_3d_range_breakout_20d,
-            label_3d_bb_squeeze_breakout, label_5d_bb_squeeze_breakout,
-            label_5d_range_breakout_20d,
-            label_3d_recover_pullback, label_2d_volume_surge_5pct
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """
-
     def _b(v):
         """Convert numpy.bool_ / np.bool to Python bool or None for DuckDB."""
         if v is None:
             return None
         return bool(v)
 
-    def _to_values(row):
-        return (
-            row["signal_date"], row["ticker"], row["entry_price"],
-            row["return_2d"], row["return_3d"], row["return_5d"],
-            row["max_drawdown_2d"], row["max_drawdown_3d"], row["max_drawdown_5d"],
-            _b(row["label_3d_5pct_first"]), _b(row["label_3d_10pct_first_c"]), _b(row["label_3d_trend_start_atr"]),
-            _b(row["label_5d_7pct_first"]), _b(row["label_5d_10pct_first_c"]), _b(row["label_2d_5pct_first"]),
-            _b(row["label_1d_5pct_first"]),
-            _b(row["label_3d_sector_excess_top30pct"]), _b(row["label_5d_sector_excess_top20pct"]),
-            _b(row["label_3d_bb_upper_break"]), _b(row["label_3d_range_breakout_20d"]),
-            _b(row["label_3d_bb_squeeze_breakout"]), _b(row["label_5d_bb_squeeze_breakout"]),
-            _b(row["label_5d_range_breakout_20d"]),
-            _b(row["label_3d_recover_pullback"]), _b(row["label_2d_volume_surge_5pct"]),
-        )
+    if target_labels:
+        # UPDATE 모드: 지정된 컬럼만 갱신
+        set_clause = ", ".join(f"{l}=?" for l in target_labels)
+        update_sql = f"UPDATE backtest_labels_c SET {set_clause} WHERE signal_date=? AND ticker=?"
 
-    # Process each date, flush every 50 dates to avoid holding all rows in memory
-    total_inserted = 0
-    batch_rows = []
-    for idx, signal_date in enumerate(trading_dates):
-        rows = _process_date(conn, signal_date)
-        batch_rows.extend(rows)
+        def _to_update_values(row):
+            return tuple(_b(row[l]) for l in target_labels) + (row["signal_date"], row["ticker"])
 
-        if (idx + 1) % 50 == 0 or (idx + 1) == len(trading_dates):
-            if batch_rows:
-                conn.executemany(insert_sql, [_to_values(r) for r in batch_rows])
-                conn.commit()
-                total_inserted += len(batch_rows)
-                batch_rows = []
-            print(f"  Processed {idx + 1}/{len(trading_dates)} dates, inserted {total_inserted} rows total")
+        total_inserted = 0
+        batch_rows = []
+        for idx, signal_date in enumerate(trading_dates):
+            rows = _process_date(conn, signal_date)
+            batch_rows.extend(rows)
+
+            if (idx + 1) % 50 == 0 or (idx + 1) == len(trading_dates):
+                if batch_rows:
+                    conn.executemany(update_sql, [_to_update_values(r) for r in batch_rows])
+                    conn.commit()
+                    total_inserted += len(batch_rows)
+                    batch_rows = []
+                print(f"  Processed {idx + 1}/{len(trading_dates)} dates, updated {total_inserted} rows total")
+    else:
+        # 전체 INSERT OR REPLACE 모드
+        insert_sql = """
+            INSERT OR REPLACE INTO backtest_labels_c (
+                signal_date, ticker, entry_price, return_2d, return_3d, return_5d,
+                max_drawdown_2d, max_drawdown_3d, max_drawdown_5d,
+                label_3d_5pct_first, label_3d_10pct_first_c, label_3d_trend_start_atr,
+                label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first, label_1d_5pct_first,
+                label_3d_sector_excess_top30pct, label_5d_sector_excess_top20pct,
+                label_3d_bb_upper_break, label_3d_range_breakout_20d,
+                label_3d_bb_squeeze_breakout, label_5d_bb_squeeze_breakout,
+                label_5d_range_breakout_20d,
+                label_3d_recover_pullback, label_2d_volume_surge_5pct
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """
+
+        def _to_values(row):
+            return (
+                row["signal_date"], row["ticker"], row["entry_price"],
+                row["return_2d"], row["return_3d"], row["return_5d"],
+                row["max_drawdown_2d"], row["max_drawdown_3d"], row["max_drawdown_5d"],
+                _b(row["label_3d_5pct_first"]), _b(row["label_3d_10pct_first_c"]), _b(row["label_3d_trend_start_atr"]),
+                _b(row["label_5d_7pct_first"]), _b(row["label_5d_10pct_first_c"]), _b(row["label_2d_5pct_first"]),
+                _b(row["label_1d_5pct_first"]),
+                _b(row["label_3d_sector_excess_top30pct"]), _b(row["label_5d_sector_excess_top20pct"]),
+                _b(row["label_3d_bb_upper_break"]), _b(row["label_3d_range_breakout_20d"]),
+                _b(row["label_3d_bb_squeeze_breakout"]), _b(row["label_5d_bb_squeeze_breakout"]),
+                _b(row["label_5d_range_breakout_20d"]),
+                _b(row["label_3d_recover_pullback"]), _b(row["label_2d_volume_surge_5pct"]),
+            )
+
+        total_inserted = 0
+        batch_rows = []
+        for idx, signal_date in enumerate(trading_dates):
+            rows = _process_date(conn, signal_date)
+            batch_rows.extend(rows)
+
+            if (idx + 1) % 50 == 0 or (idx + 1) == len(trading_dates):
+                if batch_rows:
+                    conn.executemany(insert_sql, [_to_values(r) for r in batch_rows])
+                    conn.commit()
+                    total_inserted += len(batch_rows)
+                    batch_rows = []
+                print(f"  Processed {idx + 1}/{len(trading_dates)} dates, inserted {total_inserted} rows total")
 
     print(f"Done. Total inserted: {total_inserted} rows into backtest_labels_c")
     conn.close()
@@ -668,11 +696,13 @@ def main():
     parser.add_argument("--check", action="store_true", help="Print summary stats")
     parser.add_argument("--start", help="Start date for --build (YYYY-MM-DD)", default=None)
     parser.add_argument("--end", help="End date for --build (YYYY-MM-DD)", default=None)
+    parser.add_argument("--labels", help="Comma-separated labels to rebuild (UPDATE only, e.g. label_3d_bb_upper_break)", default=None)
 
     args = parser.parse_args()
 
     if args.build:
-        cmd_build(args.start, args.end)
+        target_labels = [l.strip() for l in args.labels.split(",")] if args.labels else None
+        cmd_build(args.start, args.end, target_labels)
     elif args.filter:
         cmd_filter()
     elif args.check:

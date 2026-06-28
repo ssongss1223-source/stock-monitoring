@@ -240,14 +240,17 @@ def _lr_base_final(X: pd.DataFrame, y: pd.Series) -> tuple:
 def main() -> None:
     p = argparse.ArgumentParser()
     p.add_argument("--feature-matrix", default="data/fm_c.parquet")
+    p.add_argument("--targets", default=None, help="Comma-separated targets to train (e.g. label_3d_bb_upper_break)")
     args = p.parse_args()
+
+    targets_list = [t.strip() for t in args.targets.split(",")] if args.targets else _TARGETS
 
     df = pd.read_parquet(args.feature_matrix)
     df["signal_date"] = pd.to_datetime(df["signal_date"])
     df = df.sort_values("signal_date").reset_index(drop=True)
 
     # pd.NA(nullable boolean/integer) → int (XGBoost/sklearn 호환)
-    for t in _TARGETS:
+    for t in targets_list:
         if t in df.columns:
             df[t] = df[t].astype("float64").fillna(0).astype("int8")
 
@@ -274,14 +277,14 @@ def main() -> None:
         if col in df.columns:
             oof_cols.append(col)
     oof_df = df[oof_cols].copy()
-    for t in _TARGETS:
+    for t in targets_list:
         if t in df.columns:
             oof_df[t] = df[t]
 
     summary: list[dict] = []
     model_meta: dict[str, dict] = {}
 
-    for target in _TARGETS:
+    for target in targets_list:
         if target not in df.columns:
             print(f"  건너뜀 (컬럼 없음): {target}")
             continue
