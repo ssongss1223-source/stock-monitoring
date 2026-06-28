@@ -292,26 +292,29 @@ def main() -> None:
         ckpt_oof = out_dir / f"oof_ckpt_{label_key}.parquet"
         ckpt_sum = out_dir / f"summary_ckpt_{label_key}.json"
         if (out_dir / f"xgb_label_{label_key}.json").exists() and ckpt_oof.exists() and ckpt_sum.exists():
-            print(f"  → 체크포인트 복구: {target}")
             df_ckpt = pd.read_parquet(ckpt_oof)
-            for col in df_ckpt.columns:
-                oof_df[col] = df_ckpt[col].values
-            with open(ckpt_sum, encoding="utf-8") as _f:
-                _ckpt = json.load(_f)
-            summary.append(_ckpt["row"])
-            if _ckpt.get("model_meta"):
-                model_meta[label_key] = _ckpt["model_meta"]
-            if f"lr_base_oof_{label_key}" not in df_ckpt.columns:
-                print(f"     lr_base OOF 없음 → lr_base CV 보완")
-                y_ckpt = df[target]
-                lr_base_fold_aucs, lr_base_oof = _lr_base_cv(X, y_ckpt)
-                oof_df[f"lr_base_oof_{label_key}"] = lr_base_oof
-                _ckpt["row"]["lr_base_auc"] = float(np.mean(lr_base_fold_aucs))
-                print(f"     LR_B  fold AUC: {np.mean(lr_base_fold_aucs):.4f}")
-                lr_base_m, lr_base_scaler, lr_base_cols = _lr_base_final(X, y_ckpt)
-                joblib.dump({"model": lr_base_m, "scaler": lr_base_scaler, "feat_cols": lr_base_cols},
-                            str(out_dir / f"lr_base_label_{label_key}.pkl"))
-            continue
+            if len(df_ckpt) != len(oof_df):
+                print(f"  → 체크포인트 행 수 불일치 ({len(df_ckpt)} != {len(oof_df)}) — 재훈련")
+            else:
+                print(f"  → 체크포인트 복구: {target}")
+                for col in df_ckpt.columns:
+                    oof_df[col] = df_ckpt[col].values
+                with open(ckpt_sum, encoding="utf-8") as _f:
+                    _ckpt = json.load(_f)
+                summary.append(_ckpt["row"])
+                if _ckpt.get("model_meta"):
+                    model_meta[label_key] = _ckpt["model_meta"]
+                if f"lr_base_oof_{label_key}" not in df_ckpt.columns:
+                    print(f"     lr_base OOF 없음 → lr_base CV 보완")
+                    y_ckpt = df[target]
+                    lr_base_fold_aucs, lr_base_oof = _lr_base_cv(X, y_ckpt)
+                    oof_df[f"lr_base_oof_{label_key}"] = lr_base_oof
+                    _ckpt["row"]["lr_base_auc"] = float(np.mean(lr_base_fold_aucs))
+                    print(f"     LR_B  fold AUC: {np.mean(lr_base_fold_aucs):.4f}")
+                    lr_base_m, lr_base_scaler, lr_base_cols = _lr_base_final(X, y_ckpt)
+                    joblib.dump({"model": lr_base_m, "scaler": lr_base_scaler, "feat_cols": lr_base_cols},
+                                str(out_dir / f"lr_base_label_{label_key}.pkl"))
+                continue
 
         ret_col_name = _return_col_for_label(label_key, df_cols)
         ret_series = df[ret_col_name] if ret_col_name else None
