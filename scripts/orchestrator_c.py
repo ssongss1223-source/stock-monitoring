@@ -211,6 +211,25 @@ def run_daily_c(date_str: str | None = None) -> dict[str, dict[str, float]]:
         for ticker, prob in zip(df["ticker"], probs.tolist()):
             result[ticker][label] = float(prob)
 
+    # BB 상단 위 종목의 bb_upper_break 확률 마스킹
+    # 라벨러가 today_close >= bb_upper → NULL로 처리한 것과 동일한 조건 적용
+    _BB_LABEL = "label_3d_bb_upper_break"
+    if _BB_LABEL in labels:
+        conn_bb = get_conn(read_only=True)
+        try:
+            bb_rows = conn_bb.execute(
+                "SELECT ticker, bb_position FROM universe_daily WHERE date = CAST(? AS DATE)",
+                [date_str],
+            ).fetchall()
+        finally:
+            conn_bb.close()
+        above_bb = {t for t, bp in bb_rows if bp is not None and bp >= 1.0}
+        for ticker in above_bb:
+            if ticker in result:
+                result[ticker][_BB_LABEL] = 0.0
+        if above_bb:
+            logger.info("[Track C] BB 상단 위 %d종목 → %s 확률 0으로 마스킹", len(above_bb), _BB_LABEL)
+
     _save_to_db(date_str, result)
     logger.info("[Track C] 완료 — %d종목 %d라벨", len(result), len(labels))
     return result
