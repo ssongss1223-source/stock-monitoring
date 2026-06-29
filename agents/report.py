@@ -554,8 +554,9 @@ _C_TOP_N = 10
 
 
 def _load_c_weights() -> dict[str, float]:
-    """model_results_c.json → weight = soft_auc × soft_prec@20.
-    AUC < 0.65이거나 ret@10 < 0인 라벨 자동 제외."""
+    """model_results_c.json → weight = sqrt(prec@20).
+    제외 조건: AUC < 0.65 / ret@20 명시적 음수 / ret@20 N/A이면서 prec@20 < 0.40."""
+    import math
     try:
         with open(_C_MODEL_RESULTS_PATH, encoding="utf-8") as f:
             results = json.load(f)
@@ -566,21 +567,24 @@ def _load_c_weights() -> dict[str, float]:
                 continue
             auc = row.get("soft_auc")
             prec20 = row.get("soft_prec@20")
-            ret10 = row.get("soft_ret@10")
+            ret20 = row.get("soft_ret@20")
             if auc is None or prec20 is None:
                 continue
-            if auc < 0.65:
+            if float(auc) < 0.65:
                 continue
-            if ret10 is not None and ret10 == ret10 and ret10 < 0:
+            has_ret = ret20 is not None and ret20 == ret20  # not NaN
+            if has_ret and float(ret20) < 0:
                 continue
-            weights[label] = float(auc) * float(prec20)
+            if not has_ret and float(prec20) < 0.40:
+                continue
+            weights[label] = math.sqrt(float(prec20))
         return weights
     except Exception:
         return {}
 
 
 def _c_composite_score(label_probs: dict[str, float], weights: dict[str, float]) -> float:
-    """AUC×prec@20 가중 확률 합산. 유효 라벨(weights에 포함된)만 계산."""
+    """sqrt(prec@20) 가중 확률 합산. 유효 라벨(weights에 포함된)만 계산."""
     return sum(prob * weights[label] for label, prob in label_probs.items() if label in weights)
 
 
@@ -592,12 +596,15 @@ def _c_ticker_name(ticker: str) -> str:
         return ticker
 
 
-def build_track_c_section(date_str: str, top_n: int = _C_TOP_N) -> str:
-    """signal_history_c → 종합점수 Top-N 텔레그램 섹션 생성."""
+def build_track_c_section(date_str: str, top_n: int = 5) -> str:
+    """signal_history_c → KOSPI Top-5 / KOSDAQ Top-5 텔레그램 섹션 생성."""
     conn = get_conn(read_only=True)
     try:
         rows = conn.execute(
-            "SELECT ticker, label_probs FROM signal_history_c WHERE signal_date = CAST(? AS DATE)",
+            """SELECT shc.ticker, shc.label_probs, tm.market
+               FROM signal_history_c shc
+               LEFT JOIN ticker_master tm ON tm.ticker = shc.ticker
+               WHERE shc.signal_date = CAST(? AS DATE)""",
             [date_str],
         ).fetchall()
     except Exception as e:
@@ -610,32 +617,39 @@ def build_track_c_section(date_str: str, top_n: int = _C_TOP_N) -> str:
         return f"🤖 <b>Track C — {date_str} 신호 없음</b>"
 
     weights = _load_c_weights()
-
-    scored: list[tuple[str, float, dict]] = []
-    for ticker, label_probs_raw in rows:
+    kospi: list[tuple[str, float, dict]] = []
+    kosdaq: list[tuple[str, float, dict]] = []
+    for ticker, label_probs_raw, market in rows:
         try:
             lp = json.loads(label_probs_raw) if isinstance(label_probs_raw, str) else label_probs_raw
         except Exception:
             continue
-        scored.append((ticker, _c_composite_score(lp, weights), lp))
+        score = _c_composite_score(lp, weights)
+        bucket = kospi if market == "KOSPI" else kosdaq
+        bucket.append((ticker, score, lp))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    top = scored[:top_n]
+    kospi.sort(key=lambda x: x[1], reverse=True)
+    kosdaq.sort(key=lambda x: x[1], reverse=True)
 
-    lines = [
-        f"🤖 <b>Track C 신호 — {date_str}</b>"
-        f"  (유효라벨 {len(weights)}개 · {len(scored)}종목 중 상위 {len(top)}개)"
-    ]
-    for rank, (ticker, score, lp) in enumerate(top, 1):
-        name = _c_ticker_name(ticker)
-        valid_labels = sorted(
-            [(lbl, p) for lbl, p in lp.items() if lbl in weights],
-            key=lambda x: x[1],
-            reverse=True,
-        )[:3]
-        label_str = "  ".join(
-            f"{_C_LABEL_DISPLAY.get(lbl, lbl)} {p:.0%}" for lbl, p in valid_labels
-        )
-        lines.append(f"\n{rank}. <b>{name} ({ticker})</b>  점수 {score:.3f}\n   {label_str}")
+    def _fmt_group(items: list[tuple[str, float, dict]], header: str) -> str:
+        picked = [x for x in items if x[1] > 0][:top_n]
+        if not picked:
+            return f"{header}\n  신호 없음"
+        lines = [header]
+        for rank, (ticker, score, lp) in enumerate(picked, 1):
+            name = _c_ticker_name(ticker)
+            valid_labels = sorted(
+                [(lbl, p) for lbl, p in lp.items() if lbl in weights],
+                key=lambda x: x[1], reverse=True,
+            )[:3]
+            label_str = "  ".join(
+                f"{_C_LABEL_DISPLAY.get(lbl, lbl)} {p:.0%}" for lbl, p in valid_labels
+            )
+            lines.append(f"\n{rank}. <b>{name} ({ticker})</b>  점수 {score:.3f}\n   {label_str}")
+        return "\n".join(lines)
 
-    return "\n".join(lines)
+    n_valid = len(weights)
+    header = f"🤖 <b>Track C — {date_str}</b>  (유효라벨 {n_valid}개)"
+    kospi_section = _fmt_group(kospi, "📊 <b>KOSPI</b>")
+    kosdaq_section = _fmt_group(kosdaq, "📈 <b>KOSDAQ</b>")
+    return "\n\n".join([header, kospi_section, kosdaq_section])

@@ -407,15 +407,13 @@ class Orchestrator:
         except Exception:
             logger.exception("Track C 알림 발송 실패 — 파이프라인 계속")
 
-        # ── 5. 매도신호 수집 + 발송 ───────────────────────────────────────────
+        # ── 5. 매도신호 수집 (Track B 텔레그램 발송 제거 — Track C로 대체) ──────
         sell_signals = await sell_task
         rule_signals = [s for s in buy_signals if s.risk_reward >= 2.0]
-        telegram_signals = rule_signals + ml_only_signals
         logger.info(
-            "텔레그램 발송: 규칙(RR≥2.0) %d종목 + ML-only %d종목 (전체 규칙 매수신호 %d종목)",
-            len(rule_signals), len(ml_only_signals), len(buy_signals),
+            "규칙 신호 집계(발송 없음): 규칙(RR≥2.0) %d종목 + ML-only %d종목",
+            len(rule_signals), len(ml_only_signals),
         )
-        await self.report_agent.send(markets, telegram_signals, sell_signals, pattern_results, all_analyzed)
 
     async def _analyze_stock(
         self,
