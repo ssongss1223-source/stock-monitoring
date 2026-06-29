@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Track C label builder — computes 14 label candidates for backtest_labels_c table.
+Track C label builder — computes 9 label candidates for backtest_labels_c table.
 
 Usage:
   python scripts/labeler_c.py --build [--start YYYY-MM-DD] [--end YYYY-MM-DD]
@@ -26,20 +26,13 @@ _START_DEFAULT = "2023-06-07"
 _ALL_LABELS = [
     "label_3d_5pct_first",
     "label_3d_10pct_first_c",
-    "label_3d_trend_start_atr",
     "label_5d_7pct_first",
     "label_5d_10pct_first_c",
     "label_2d_5pct_first",
-    "label_1d_5pct_first",
-    "label_3d_sector_excess_top30pct",
-    "label_5d_sector_excess_top20pct",
     "label_3d_bb_upper_break",
     "label_3d_range_breakout_20d",
-    "label_3d_bb_squeeze_breakout",
-    "label_5d_bb_squeeze_breakout",
     "label_5d_range_breakout_20d",
     "label_3d_recover_pullback",
-    "label_2d_volume_surge_5pct",
 ]
 
 
@@ -63,24 +56,6 @@ def _label_first_to_hit(
         if c <= stop_price:
             return False
     return False
-
-
-def _compute_bb_series(
-    closes: np.ndarray,
-    window: int = 20,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """
-    Compute rolling 20-day BB upper, lower, mid for a closes array.
-    Returns (bb_upper, bb_lower, bb_mid) arrays with NaN where insufficient data.
-    """
-    s = pd.Series(closes)
-    roll = s.rolling(window)
-    mid = roll.mean().to_numpy()
-    std = roll.std(ddof=1).to_numpy()
-    bb_upper = mid + 2 * std
-    bb_lower = mid - 2 * std
-
-    return bb_upper, bb_lower, mid
 
 
 def _label_ticker(
@@ -156,9 +131,6 @@ def _label_ticker(
     past_highs = past["high"].values
 
     # ── Group 1: First-to-hit labels ──
-    result["label_1d_5pct_first"] = _label_first_to_hit(
-        future_closes[:1].tolist(), entry_price, 0.05, 0.025
-    )
     result["label_2d_5pct_first"] = _label_first_to_hit(
         future_closes[:2].tolist(), entry_price, 0.05, 0.025
     )
@@ -174,17 +146,6 @@ def _label_ticker(
     result["label_5d_10pct_first_c"] = _label_first_to_hit(
         future_closes[:5].tolist(), entry_price, 0.10, 0.05
     )
-
-    # ATR-based label
-    if atr and atr > 0 and len(future_closes) >= 3:
-        result["label_3d_trend_start_atr"] = _label_first_to_hit(
-            future_closes[:3].tolist(),
-            entry_price,
-            1.2 * atr / entry_price,
-            1.0 * atr / entry_price,
-        )
-    else:
-        result["label_3d_trend_start_atr"] = None
 
     # ── Group 2: Technical breakout labels ──
 
@@ -215,54 +176,6 @@ def _label_ticker(
         result["label_3d_bb_upper_break"] = None
         result["label_5d_bb_upper_break"] = None
 
-    # BB squeeze (3d, 5d)
-    if len(past_closes) >= 252 and len(future_closes) >= 3:
-        bb_upper_series, bb_lower_series, bb_mid_series = _compute_bb_series(
-            past_closes
-        )
-        # Current squeeze metrics
-        bb_width_today = (bb_upper_series[-1] - bb_lower_series[-1]) / bb_mid_series[-1]
-
-        # Get all bb_width values from past 252 days
-        bb_widths = (
-            (bb_upper_series - bb_lower_series) / bb_mid_series
-        )  # array with NaNs
-        bb_widths_valid = bb_widths[~np.isnan(bb_widths)]
-
-        if len(bb_widths_valid) >= 50:  # min 40 days required per spec
-            p30 = np.percentile(bb_widths_valid, 30)
-            is_squeeze = bb_width_today <= p30
-            bb_upper_today = bb_upper_series[-1]
-
-            result["label_3d_bb_squeeze_breakout"] = (
-                True
-                if is_squeeze
-                and len(future_closes) >= 3
-                and np.max(future_closes[:3]) > bb_upper_today
-                else (
-                    False
-                    if is_squeeze and len(future_closes) >= 3
-                    else None
-                )
-            )
-            result["label_5d_bb_squeeze_breakout"] = (
-                True
-                if is_squeeze
-                and len(future_closes) >= 5
-                and np.max(future_closes[:5]) > bb_upper_today
-                else (
-                    False
-                    if is_squeeze and len(future_closes) >= 5
-                    else None
-                )
-            )
-        else:
-            result["label_3d_bb_squeeze_breakout"] = None
-            result["label_5d_bb_squeeze_breakout"] = None
-    else:
-        result["label_3d_bb_squeeze_breakout"] = None
-        result["label_5d_bb_squeeze_breakout"] = None
-
     # Range breakout (20d)
     if len(past_highs) >= 20:
         high_20d = np.max(past_highs[-20:])
@@ -291,23 +204,6 @@ def _label_ticker(
             result["label_3d_recover_pullback"] = None
     else:
         result["label_3d_recover_pullback"] = None
-
-    # Volume surge (20일 평균 대비 2배 이상) + 2일 내 +5%
-    past_volumes = past["volume"].values
-    if len(past_volumes) >= 21:
-        avg_vol_20d = past_volumes[-21:-1].mean()
-        if avg_vol_20d > 0 and past_volumes[-1] >= 2 * avg_vol_20d:
-            result["label_2d_volume_surge_5pct"] = _label_first_to_hit(
-                future_closes[:2].tolist(), entry_price, 0.05, 0.025
-            )
-        else:
-            result["label_2d_volume_surge_5pct"] = None
-    else:
-        result["label_2d_volume_surge_5pct"] = None
-
-    # Cross-sectional excess labels computed later (placeholder None)
-    result["label_3d_sector_excess_top30pct"] = None
-    result["label_5d_sector_excess_top20pct"] = None
 
     return result
 
@@ -358,14 +254,6 @@ def _process_date(conn, signal_date: date) -> list[dict]:
     atr_rows = conn.execute(atr_query).fetchall()
     atr_dict = {row[0]: row[1] for row in atr_rows}
 
-    # Load sector info for cross-sectional calculations
-    sector_query = """
-        SELECT ticker, sector
-        FROM ticker_master
-    """
-    sector_rows = conn.execute(sector_query).fetchall()
-    sector_dict = {row[0]: row[1] for row in sector_rows}
-
     # Pre-index ohlcv by ticker to avoid O(N²) per-ticker filtering
     ohlcv_by_ticker = {t: grp.reset_index(drop=True) for t, grp in ohlcv_df.groupby("ticker")}
 
@@ -380,98 +268,6 @@ def _process_date(conn, signal_date: date) -> list[dict]:
         atr = atr_dict.get(ticker)
         result = _label_ticker(ticker_hist, signal_date, atr)
         ticker_results[ticker] = result
-
-    # Compute sector excess labels
-    for ticker, result in ticker_results.items():
-        sector = sector_dict.get(ticker)
-        if not sector:
-            continue
-
-        # Compute sector avg for 3d and 5d
-        sector_returns_3d = [
-            r["return_3d"]
-            for t, r in ticker_results.items()
-            if sector_dict.get(t) == sector and r["return_3d"] is not None
-        ]
-        sector_returns_5d = [
-            r["return_5d"]
-            for t, r in ticker_results.items()
-            if sector_dict.get(t) == sector and r["return_5d"] is not None
-        ]
-
-        sector_avg_3d = (
-            np.mean(sector_returns_3d) if sector_returns_3d else None
-        )
-        sector_avg_5d = (
-            np.mean(sector_returns_5d) if sector_returns_5d else None
-        )
-
-        # Sector excess: return - sector_avg
-        if result["return_3d"] is not None and sector_avg_3d is not None:
-            sector_excess_3d = result["return_3d"] - sector_avg_3d
-        else:
-            sector_excess_3d = None
-
-        if result["return_5d"] is not None and sector_avg_5d is not None:
-            sector_excess_5d = result["return_5d"] - sector_avg_5d
-        else:
-            sector_excess_5d = None
-
-        # Compute percentile ranks for sector excess
-        all_sector_excess_3d = []
-        all_sector_excess_5d = []
-
-        for t, r in ticker_results.items():
-            t_sector = sector_dict.get(t)
-            if not t_sector:
-                continue
-            t_sector_avg_3d = np.mean(
-                [
-                    r2["return_3d"]
-                    for t2, r2 in ticker_results.items()
-                    if sector_dict.get(t2) == t_sector and r2["return_3d"] is not None
-                ]
-            ) if [
-                r2["return_3d"]
-                for t2, r2 in ticker_results.items()
-                if sector_dict.get(t2) == t_sector and r2["return_3d"] is not None
-            ] else None
-            t_sector_avg_5d = np.mean(
-                [
-                    r2["return_5d"]
-                    for t2, r2 in ticker_results.items()
-                    if sector_dict.get(t2) == t_sector and r2["return_5d"] is not None
-                ]
-            ) if [
-                r2["return_5d"]
-                for t2, r2 in ticker_results.items()
-                if sector_dict.get(t2) == t_sector and r2["return_5d"] is not None
-            ] else None
-
-            if r["return_3d"] is not None and t_sector_avg_3d is not None:
-                all_sector_excess_3d.append(r["return_3d"] - t_sector_avg_3d)
-            if r["return_5d"] is not None and t_sector_avg_5d is not None:
-                all_sector_excess_5d.append(r["return_5d"] - t_sector_avg_5d)
-
-        if all_sector_excess_3d:
-            p70_sector_excess_3d = np.percentile(all_sector_excess_3d, 70)
-            if (
-                sector_excess_3d is not None
-                and sector_excess_3d >= p70_sector_excess_3d
-            ):
-                result["label_3d_sector_excess_top30pct"] = True
-            elif sector_excess_3d is not None:
-                result["label_3d_sector_excess_top30pct"] = False
-
-        if all_sector_excess_5d:
-            p80_sector_excess_5d = np.percentile(all_sector_excess_5d, 80)
-            if (
-                sector_excess_5d is not None
-                and sector_excess_5d >= p80_sector_excess_5d
-            ):
-                result["label_5d_sector_excess_top20pct"] = True
-            elif sector_excess_5d is not None:
-                result["label_5d_sector_excess_top20pct"] = False
 
     # Build output rows
     rows = []
@@ -568,14 +364,11 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str], target_labels: O
             INSERT OR REPLACE INTO backtest_labels_c (
                 signal_date, ticker, entry_price, return_2d, return_3d, return_5d,
                 max_drawdown_2d, max_drawdown_3d, max_drawdown_5d,
-                label_3d_5pct_first, label_3d_10pct_first_c, label_3d_trend_start_atr,
-                label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first, label_1d_5pct_first,
-                label_3d_sector_excess_top30pct, label_5d_sector_excess_top20pct,
+                label_3d_5pct_first, label_3d_10pct_first_c,
+                label_5d_7pct_first, label_5d_10pct_first_c, label_2d_5pct_first,
                 label_3d_bb_upper_break, label_3d_range_breakout_20d,
-                label_3d_bb_squeeze_breakout, label_5d_bb_squeeze_breakout,
-                label_5d_range_breakout_20d,
-                label_3d_recover_pullback, label_2d_volume_surge_5pct
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                label_5d_range_breakout_20d, label_3d_recover_pullback
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
 
         def _to_values(row):
@@ -583,14 +376,10 @@ def cmd_build(start_str: Optional[str], end_str: Optional[str], target_labels: O
                 row["signal_date"], row["ticker"], row["entry_price"],
                 row["return_2d"], row["return_3d"], row["return_5d"],
                 row["max_drawdown_2d"], row["max_drawdown_3d"], row["max_drawdown_5d"],
-                _b(row["label_3d_5pct_first"]), _b(row["label_3d_10pct_first_c"]), _b(row["label_3d_trend_start_atr"]),
+                _b(row["label_3d_5pct_first"]), _b(row["label_3d_10pct_first_c"]),
                 _b(row["label_5d_7pct_first"]), _b(row["label_5d_10pct_first_c"]), _b(row["label_2d_5pct_first"]),
-                _b(row["label_1d_5pct_first"]),
-                _b(row["label_3d_sector_excess_top30pct"]), _b(row["label_5d_sector_excess_top20pct"]),
                 _b(row["label_3d_bb_upper_break"]), _b(row["label_3d_range_breakout_20d"]),
-                _b(row["label_3d_bb_squeeze_breakout"]), _b(row["label_5d_bb_squeeze_breakout"]),
-                _b(row["label_5d_range_breakout_20d"]),
-                _b(row["label_3d_recover_pullback"]), _b(row["label_2d_volume_surge_5pct"]),
+                _b(row["label_5d_range_breakout_20d"]), _b(row["label_3d_recover_pullback"]),
             )
 
         total_inserted = 0
