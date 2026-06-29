@@ -515,9 +515,16 @@ def main() -> None:
     print(f"모델 메타 저장: {meta_path}")
 
     result_path = Path("data/model_results_c.json")
+    if result_path.exists():
+        with open(result_path, encoding="utf-8") as f:
+            existing = json.load(f)
+        updated = {r["target"] for r in summary}
+        merged = [r for r in existing if r["target"] not in updated] + summary
+    else:
+        merged = summary
     with open(result_path, "w", encoding="utf-8") as f:
-        json.dump(summary, f, ensure_ascii=False, indent=2)
-    print(f"상세 결과 저장: {result_path}")
+        json.dump(merged, f, ensure_ascii=False, indent=2)
+    print(f"상세 결과 저장: {result_path}  ({len(merged)}라벨)")
 
     _write_to_db(summary, _date.today().isoformat(), fcols)
 
